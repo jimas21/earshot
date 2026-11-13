@@ -372,7 +372,8 @@ namespace tether::bluetooth {
 
             bool le_bearer_available() const override {
                 auto device = lookup();
-                return device && device->has_le_bearer;
+                // No bearer API: the phone offering ANCS on a bond is the only sign of an LE half.
+                return device && (device->has_le_bearer || (no_bearer_api() && device->ancs_bond()));
             }
 
             bool le_connected() const override {
@@ -387,7 +388,7 @@ namespace tether::bluetooth {
 
             void set_preferred_bearer(const std::string& bearer) override {
                 auto device = lookup();
-                if (!device)
+                if (!device || no_bearer_api())
                     return;
                 GError* error = nullptr;
                 GVariant* reply = g_dbus_connection_call_sync(
@@ -437,6 +438,9 @@ namespace tether::bluetooth {
                 return ConnectResult::Failed;
             }
 
+            // No-root mode on a bluetoothd without --experimental: nothing here may use or write the bearer API.
+            bool no_bearer_api() const { return no_root_mode() && !monitor_.snapshot().experimental_api; }
+
             bool le_connect_outstanding() const override {
                 std::lock_guard<std::mutex> lock(le_->mutex);
                 return le_->pending;
@@ -484,6 +488,10 @@ namespace tether::bluetooth {
                     err = "device not present";
                     return ConnectResult::Failed;
                 }
+                // Without the bearer API this side cannot dial LE: the phone does, answering the
+                // solicitation advert, and the ANCS client attaches to whatever link it opens.
+                if (!device->has_le_bearer && no_bearer_api())
+                    return ConnectResult::Busy;
                 if (!device->has_le_bearer) {
                     err = "no LE bearer";
                     return ConnectResult::Failed;

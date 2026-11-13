@@ -98,6 +98,9 @@ namespace tether::bluetooth {
     bool save_config(const Config& config);
 
     // The address supervision should run against: none while Bluetooth is off.
+    // The config used when nothing is saved, and the starting point for one that is missing keys.
+    Config default_config();
+
     std::string supervised_address(const Config& config);
 
     // exposed for tests without touching fs

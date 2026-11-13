@@ -358,7 +358,7 @@ namespace tether::bluetooth {
         }
         Capability resolved = resolve_capability(parsed, std::nullopt, preferred);
         resolved = resolve_capability(
-            parsed, read_secure_connections(resolved.adapter_id), preferred, l2cap_ertm_disabled());
+            parsed, read_secure_connections(resolved.adapter_id), preferred, l2cap_ertm_disabled(), no_root_mode());
 
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -461,7 +461,7 @@ namespace tether::bluetooth {
         impl_->objects = parse_managed_objects(probe);
         // Secure Connections stays unknown until the watcher thread's first
         // refresh: probing it here would fork btmgmt on the startup path.
-        impl_->cap = resolve_capability(impl_->objects, std::nullopt, {}, l2cap_ertm_disabled());
+        impl_->cap = resolve_capability(impl_->objects, std::nullopt, {}, l2cap_ertm_disabled(), no_root_mode());
         g_variant_unref(probe);
 
         impl_->efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);

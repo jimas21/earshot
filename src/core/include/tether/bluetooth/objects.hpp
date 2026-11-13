@@ -111,6 +111,9 @@ namespace tether::bluetooth {
         bool supports_map() const { return has_uuid(UUID_MAP_MAS); }
         bool supports_pbap() const { return has_uuid(UUID_PBAP_PSE); }
         bool supports_ancs() const { return has_uuid(UUID_ANCS); }
+        // A bond whose LE half is visible from Device1 alone: paired, and the phone offers ANCS. Used where
+        // BlueZ's experimental Bearer.LE1 is not available to say so.
+        bool ancs_bond() const { return (paired || bonded) && supports_ancs(); }
         bool looks_like_iphone() const;
         // Apple audio gear rather than a phone: AAP battery is worth trying on it.
         bool looks_like_airpods() const;
@@ -229,6 +232,9 @@ namespace tether::bluetooth {
         bool secure_connections_known = false;
         // bluetooth.disable_ertm is set; obexd's L2CAP connects fail and MAP/PBAP report no_record
         bool ertm_disabled = false;
+        // No-root mode: stock BlueZ without --experimental, nothing in /etc changed. The LE half is read from
+        // Device1 (ANCS offered) and nothing here is reported as something the user must fix with root.
+        bool no_root = false;
         // Adapter the steps below apply to, e.g. "hci0". The class unit is templated on it.
         std::string adapter_id;
         // Human-readable explanations for anything short of full mode, shown verbatim
@@ -258,7 +264,12 @@ namespace tether::bluetooth {
     Capability resolve_capability(const BluezObjects& objects,
                                   std::optional<bool> secure_connections = std::nullopt,
                                   const std::string& preferred_id = {},
-                                  bool ertm_disabled = false);
+                                  bool ertm_disabled = false,
+                                  bool no_root = false);
+
+    // TETHER_NO_ROOT=1: the engine runs as a normal user on stock BlueZ. Phone-initiated pairing, bonds judged from
+    // Device1, no PreferredBearer, class of device and ERTM reported but never required.
+    bool no_root_mode();
 
     // Reads /sys/module/bluetooth/parameters/disable_ertm. False when unreadable.
     bool l2cap_ertm_disabled();

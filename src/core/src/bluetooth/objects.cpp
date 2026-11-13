@@ -585,9 +585,11 @@ namespace tether::bluetooth {
     Capability resolve_capability(const BluezObjects& objects,
                                   std::optional<bool> secure_connections,
                                   const std::string& preferred_id,
-                                  bool ertm_disabled) {
+                                  bool ertm_disabled,
+                                  bool no_root) {
         Capability cap;
         cap.ertm_disabled = ertm_disabled;
+        cap.no_root = no_root;
 
         const Adapter* adapter = preferred_adapter(objects, preferred_id);
 
@@ -618,6 +620,9 @@ namespace tether::bluetooth {
                 // The interface being populated says the API is live, not that the
                 // bond has an LE half. Only Bearer.LE1.Bonded says that.
                 if (d.has_le_bearer && d.le_bonded)
+                    cap.bond_has_le = true;
+                // Without the bearer API the offered ANCS service is the evidence.
+                if (no_root && !d.has_le_bearer && d.ancs_bond())
                     cap.bond_has_le = true;
                 if (d.ancs_notifying)
                     cap.bond_carries_ancs = true;
@@ -654,7 +659,11 @@ namespace tether::bluetooth {
                                        "Bluetooth permission toggles."));
             cap.mode = DeliveryMode::Compatibility;
         }
-        if (cap.bearer_api == BearerApi::Absent) {
+        if (no_root) {
+            if (cap.bearer_api == BearerApi::Absent)
+                cap.reasons.emplace_back(_("Running without BlueZ's experimental mode. Notifications work when the "
+                                           "iPhone itself starts the pairing and reconnects."));
+        } else if (cap.bearer_api == BearerApi::Absent) {
             cap.setup.push_back({_("Notification mirroring needs BlueZ's experimental bearer API "
                                    "(org.bluez.Bearer.LE1), which bluetoothd is not exposing. Set this up before "
                                    "pairing: a bond made without it has no LE half."),
@@ -676,7 +685,11 @@ namespace tether::bluetooth {
         if (known_without_sc && !cap.bonded_device_present)
             cap.reasons.push_back(known_without_sc_reason);
 
-        if (cap.bonded_device_present && !cap.bond_has_le && !cap.bond_carries_ancs) {
+        if (no_root && cap.bonded_device_present && !cap.bond_has_le && !cap.bond_carries_ancs) {
+            cap.reasons.emplace_back(_("The iPhone is paired but has not offered notifications yet. Open Settings > "
+                                       "Bluetooth on the iPhone and check Show Notifications for this device. If it "
+                                       "never appears, forget this device on the iPhone and pair again."));
+        } else if (cap.bonded_device_present && !cap.bond_has_le && !cap.bond_carries_ancs) {
             std::string reason = _("A device is bonded, but the bond covers BR/EDR only -- no LE keys were derived, "
                                    "so notification mirroring cannot work on it.");
 
@@ -713,12 +726,20 @@ namespace tether::bluetooth {
             }
             cap.reasons.emplace_back(std::move(reason));
         }
-        if (!cap.class_ok) {
+        if (!cap.class_ok && no_root) {
+            cap.reasons.emplace_back(_("This adapter does not present itself as A/V Hands-Free. Changing that needs "
+                                       "administrator rights, so it is left alone. If the iPhone does not offer "
+                                       "Messages or Contacts, that is why."));
+        } else if (!cap.class_ok) {
             cap.setup.push_back({_("The iPhone will not offer its Messages and Contacts permissions until this "
                                    "adapter presents itself as A/V Hands-Free (major 4, minor 8)."),
                                  set_class_command(cap.adapter_id, systemd_booted())});
         }
-        if (cap.ertm_disabled) {
+        if (cap.ertm_disabled && no_root) {
+            cap.reasons.emplace_back(_("The kernel has L2CAP ERTM disabled (bluetooth.disable_ertm). Messages and "
+                                       "Contacts may fail to open. Turning it back on needs administrator rights, "
+                                       "so it is left alone."));
+        } else if (cap.ertm_disabled) {
             // obexd opens MAP and PBAP over L2CAP in ERTM mode, which the kernel refuses with EINVAL here
             cap.setup.push_back({_("Messages and Contacts need L2CAP ERTM, which the kernel has disabled "
                                    "(bluetooth.disable_ertm). This turns it back on until reboot. To keep it, remove "
@@ -728,6 +749,11 @@ namespace tether::bluetooth {
         }
 
         return cap;
+    }
+
+    bool no_root_mode() {
+        const char* value = std::getenv("TETHER_NO_ROOT");
+        return value && *value && std::string(value) != "0";
     }
 
     bool l2cap_ertm_disabled() {
@@ -806,6 +832,7 @@ namespace tether::bluetooth {
             {"secure_connections",
              c.secure_connections_known ? nlohmann::json(c.secure_connections) : nlohmann::json(nullptr)},
             {"ertm_disabled", c.ertm_disabled},
+            {"no_root", c.no_root},
             {"adapter_id", c.adapter_id},
             {"reasons", c.reasons},
             {"setup", setup},

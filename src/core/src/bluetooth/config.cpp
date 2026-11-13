@@ -64,6 +64,27 @@ namespace tether::bluetooth {
         return PhoneAudio::Auto;
     }
 
+    namespace {
+        bool env_on(const char* name) {
+            const char* value = std::getenv(name);
+            return value && *value && std::string(value) != "0";
+        }
+    } // namespace
+
+    // What a config with nothing saved means. TETHER_NO_ROOT turns call control on by default (it reads
+    // PipeWire's telephony when BlueZ has none, which is all a user-level install can reach); TETHER_CALLS=0
+    // turns it back off. TETHER_RETENTION picks how the message journal is kept until the user chooses.
+    Config default_config() {
+        Config config;
+        if (env_on("TETHER_NO_ROOT")) {
+            const char* calls = std::getenv("TETHER_CALLS");
+            config.calls_enabled = !(calls && std::string(calls) == "0");
+        }
+        if (const char* retention = std::getenv("TETHER_RETENTION"); retention && *retention)
+            config.retention = retention_from_string(retention);
+        return config;
+    }
+
     std::string config_path() {
         const std::filesystem::path dir = paths::config_dir();
         if (dir.empty())
@@ -101,7 +122,7 @@ namespace tether::bluetooth {
     }
 
     Config deserialize_config(const std::string& text) {
-        Config config;
+        Config config = default_config();
         try {
             auto j = nlohmann::json::parse(text);
             if (!j.is_object())
@@ -112,10 +133,10 @@ namespace tether::bluetooth {
             const int version = j.value("config_version", 0);
             config.ancs_content_enabled = version < 1 ? true : j.value("ancs_content_enabled", true);
             config.group_messages_enabled = j.value("group_messages_enabled", false);
-            config.calls_enabled = j.value("calls_enabled", false);
+            config.calls_enabled = j.value("calls_enabled", config.calls_enabled);
             config.enabled = j.value("enabled", true);
             config.adapter = j.value("adapter", "");
-            config.retention = retention_from_string(j.value("retention", "encrypted"));
+            config.retention = j.contains("retention") ? retention_from_string(j.value("retention", "encrypted")) : config.retention;
             config.desktop_popups_enabled = j.value("desktop_popups_enabled", true);
             config.popup_previews_enabled = j.value("popup_previews_enabled", true);
             config.clipboard_auto_share = j.value("clipboard_auto_share", true);
@@ -146,10 +167,10 @@ namespace tether::bluetooth {
     Config load_config() {
         std::string path = config_path();
         if (path.empty())
-            return {};
+            return default_config();
         std::ifstream in(path);
         if (!in.is_open())
-            return {};
+            return default_config();
         std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         return deserialize_config(text);
     }
