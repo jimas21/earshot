@@ -29,11 +29,31 @@ configure_file(
 
 include(GNUInstallDirs)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(WAYLAND REQUIRED IMPORTED_TARGET wayland-client)
-pkg_check_modules(AVAHI REQUIRED IMPORTED_TARGET avahi-client)
+
+# Optional pieces. All default ON, which is the full desktop build. Turning one off
+# gives a smaller daemon for machines without that piece (a headset, a server):
+#   TETHER_WAYLAND    clipboard sync and the idle check (needs wayland-client)
+#   TETHER_MDNS       Wi-Fi pairing: mDNS advertise and browse (needs avahi-client)
+#   TETHER_LIBSECRET  desktop wallet for the store key; a 0600 key file is used instead
+#   TETHER_LIBNOTIFY  desktop popups for notifications and received files
+#   TETHER_BUILD_GTK  tether-gtk and tether-dialog
+option(TETHER_WAYLAND "Clipboard sync over Wayland (needs wayland-client)" ON)
+option(TETHER_MDNS "mDNS advertise and discovery for Wi-Fi pairing (needs avahi-client)" ON)
+option(TETHER_LIBSECRET "Keep the store key in the desktop wallet (needs libsecret)" ON)
+option(TETHER_LIBNOTIFY "Desktop popups for notifications and files (needs libnotify)" ON)
+option(TETHER_BUILD_GTK "Build tether-gtk and tether-dialog (needs GTK 3)" ON)
+
+if(TETHER_WAYLAND)
+    pkg_check_modules(WAYLAND REQUIRED IMPORTED_TARGET wayland-client)
+endif()
+if(TETHER_MDNS)
+    pkg_check_modules(AVAHI REQUIRED IMPORTED_TARGET avahi-client)
+endif()
 find_package(OpenSSL REQUIRED)
 find_package(Intl REQUIRED)
-pkg_check_modules(SECRET REQUIRED IMPORTED_TARGET libsecret-1)
+if(TETHER_LIBSECRET)
+    pkg_check_modules(SECRET REQUIRED IMPORTED_TARGET libsecret-1)
+endif()
 
 include(FetchContent)
 
@@ -48,6 +68,11 @@ set(JSON_Install OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(nlohmann_json)
 
 option(BUILD_TESTING "Build the unit tests (fetches googletest)" ON)
+# The tests link the whole daemon, so they need every optional piece.
+if(BUILD_TESTING AND NOT (TETHER_WAYLAND AND TETHER_MDNS AND TETHER_LIBSECRET AND TETHER_LIBNOTIFY))
+    message(STATUS "An optional feature is off: not building the unit tests")
+    set(BUILD_TESTING OFF)
+endif()
 if(BUILD_TESTING)
     FetchContent_Declare(
       googletest
