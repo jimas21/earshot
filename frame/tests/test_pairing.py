@@ -469,7 +469,7 @@ class ForgetTests(unittest.TestCase):
 
     def test_forget_asks_first_then_clears_our_side(self):
         rig, fake = self.paired_rig()
-        self.assertTrue(rig.state()["phone"]["paired"])
+        self.assertTrue(rig.pump(lambda: rig.state()["phone"]["paired"], 3))
         rig.action(type="forget_do")             # no question asked yet: ignored
         rig.settle_for(0.2)
         self.assertEqual(fake.commands("unpair"), [])
