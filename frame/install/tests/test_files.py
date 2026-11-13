@@ -81,6 +81,7 @@ class UnitFileTests(unittest.TestCase):
         self.assertIn("ExecStart=%h/.local/share/earshot/engine/tetherd", s["Service"])
         self.assertIn("WantedBy=default.target", s["Install"])
         self.assertIn("Environment=TETHER_LOG_STDERR=1", s["Service"])
+        self.assertIn("Environment=TETHER_NO_TCP=1", s["Service"])   # Bluetooth only: nothing listens on the network
         self.assertIn("NoNewPrivileges=yes", s["Service"])
         self.assertFalse([l for l in s["Service"] if l.startswith("User=")])  # runs as the user manager's user
 

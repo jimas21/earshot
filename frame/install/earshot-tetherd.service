@@ -18,6 +18,8 @@ ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do busctl --system status org.blu
 ExecStartPre=-/usr/bin/pkill -u %U -f ^tetherd
 ExecStart=%h/.local/share/earshot/engine/tetherd
 Environment=TETHER_LOG_STDERR=1
+# Earshot only needs Bluetooth: no TCP/mTLS listener on the network, no mDNS advertisement.
+Environment=TETHER_NO_TCP=1
 UnsetEnvironment=LD_LIBRARY_PATH LD_PRELOAD
 Restart=on-failure
 RestartSec=5
