@@ -64,6 +64,8 @@ def to_confirm(test, rig, fake):
 class FlowStartTests(unittest.TestCase):
     def test_no_phone_offers_the_pair_button(self):
         rig, _ = pair_rig(self)
+        # the status the setup message is built from arrives a moment after the first state push
+        self.assertTrue(rig.pump(lambda: ((rig.state() or {}).get("setup") or {}).get("kind") == "no_phone", 3))
         setup = rig.state()["setup"]
         self.assertEqual(setup["kind"], "no_phone")
         self.assertEqual(setup["action"], {"act": "pair-start", "label": "Pair iPhone"})

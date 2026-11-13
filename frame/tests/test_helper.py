@@ -715,9 +715,10 @@ class ShellTests(unittest.TestCase):
     def test_reinjects_after_a_page_reload(self):
         rig = Rig(self)
         rig.start()
+        before = len(rig.dev.pages["page1"]["states"])
         rig.dev.reload("page1")
         self.assertTrue(rig.pump(lambda: len(rig.dev.pages["page1"]["scripts"]) == 2, 3))
-        before = len(rig.dev.pages["page1"]["states"])
+        # counted before the reload: the state can be pushed to the fresh page before this line runs
         self.assertTrue(rig.pump(lambda: len(rig.dev.pages["page1"]["states"]) > before, 3))
 
     def test_only_pushes_when_something_changed(self):
