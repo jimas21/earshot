@@ -1,5 +1,6 @@
 #include "scoped_env.hpp"
 
+#include <fstream>
 #include <gtest/gtest.h>
 #include <tether/paths.hpp>
 #include <unistd.h>
@@ -79,4 +80,27 @@ TEST_F(PathsTest, UsesTheXdgDirectoryOnceItExists) {
     fs::create_directories(xdg_ / "config/tether");
 
     EXPECT_EQ(tether::paths::config_dir(), xdg_ / "config/tether");
+}
+
+TEST(WritePrivateFile, CreatesOwnerOnlyAndReplacesAtomically) {
+    const fs::path dir = fs::temp_directory_path() / ("tether_private_" + std::to_string(getpid()));
+    fs::remove_all(dir);
+    const fs::path file = dir / "nested" / "secret.json";
+
+    ASSERT_TRUE(tether::paths::write_private_file(file, "first"));
+    ASSERT_TRUE(tether::paths::write_private_file(file, "second"));
+
+    std::ifstream in(file);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(text, "second");
+    EXPECT_EQ(fs::status(file).permissions() & (fs::perms::group_all | fs::perms::others_all), fs::perms::none);
+
+    // nothing left beside it
+    int entries = 0;
+    for (const auto& entry : fs::directory_iterator(file.parent_path())) {
+        (void)entry;
+        ++entries;
+    }
+    EXPECT_EQ(entries, 1);
+    fs::remove_all(dir);
 }

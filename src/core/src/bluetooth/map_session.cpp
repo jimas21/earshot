@@ -316,6 +316,9 @@ namespace tether::bluetooth {
         // mangle anything outside the phone's default encoding.
         g_variant_builder_add(&args, "{sv}", "Charset", g_variant_new_string("utf8"));
 
+        // Made before the push so the final status of the transfer cannot be missed
+        TransferWatch watch(state_->bus);
+
         GError* error = nullptr;
         GVariant* reply = g_dbus_connection_call_sync(state_->bus,
                                                       OBEX_NAME,
@@ -348,7 +351,7 @@ namespace tether::bluetooth {
             return false;
         }
 
-        const TransferState state = wait_for_transfer(state_->bus, transfer, MAP_PUSH_TIMEOUT_SECONDS);
+        const TransferState state = wait_for_transfer(state_->bus, transfer, MAP_PUSH_TIMEOUT_SECONDS, &watch);
         std::filesystem::remove(source, ec);
 
         if (state == TransferState::Error) {
@@ -358,6 +361,10 @@ namespace tether::bluetooth {
         if (state == TransferState::Active) {
             // The transfer is still running, so the message may yet be sent.
             err = "Timed out waiting for the phone to accept the message; it may still be sent.";
+            return false;
+        }
+        if (state == TransferState::Unknown) {
+            err = "The phone did not say whether the message was sent. Check the conversation before sending it again.";
             return false;
         }
         return true;

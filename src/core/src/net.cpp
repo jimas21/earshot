@@ -68,6 +68,7 @@ namespace tether {
     // Global list of active connected sessions
     static std::map<int, ClientSession> active_sessions;
     static std::mutex g_sessions_mutex;
+    static std::atomic<bool> g_tcp_enabled{true};
     static std::set<int> local_subscribers;
     static std::mutex g_subscribers_mutex;
 
@@ -172,13 +173,15 @@ namespace tether {
         if (Otp current = otp_peek(); current && current.code == code)
             return;
         uint64_t id = otp_store(code, sender_domain);
-        broadcast_local_event(make_otp_event({code, sender_domain, id}).dump(), exclude_fd);
+        broadcast_local_event(make_otp_event({code, sender_domain, id}).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), exclude_fd);
     }
 
     void set_discovered_devices(const nlohmann::json& devices) {
         std::lock_guard<std::mutex> lock(g_discovered_mutex);
         g_discovered_devices = devices.is_array() ? devices : nlohmann::json::array();
     }
+
+    void set_tcp_enabled(bool enabled) { g_tcp_enabled = enabled; }
 
     void register_local_subscriber(int fd) {
         std::lock_guard<std::mutex> lock(g_subscribers_mutex);
@@ -305,11 +308,26 @@ namespace tether {
             }
         }
 
-        std::lock_guard<std::mutex> lock(g_subscribers_mutex);
-        for (int fd : local_subscribers) {
+        // The list is copied so no write happens under the lock: a client that stops reading would otherwise stall
+        // every broadcast, and every subscribe or unsubscribe behind it. Each fd has its own write lock, so
+        // packets still cannot interleave.
+        std::vector<int> targets;
+        {
+            std::lock_guard<std::mutex> lock(g_subscribers_mutex);
+            targets.assign(local_subscribers.begin(), local_subscribers.end());
+        }
+        std::vector<int> dropped;
+        for (int fd : targets) {
             if (fd == exclude_fd)
                 continue;
-            write_plain_packet(fd, packet);
+            if (!robust_plain_write(fd, packet.c_str(), packet.size()))
+                dropped.push_back(fd);
+        }
+        // A subscriber that cannot keep up has a stream that is already damaged or about to be: drop it
+        // so it resubscribes cleanly rather than slowing everyone else down.
+        for (int fd : dropped) {
+            debug::log(WARN, "net: dropping local subscriber fd {}: it is not reading", fd);
+            unregister_local_subscriber(fd);
         }
     }
 
@@ -500,7 +518,7 @@ namespace tether {
             debug::log(INFO, "mDNS: avahi-daemon is available");
         else
             debug::log(ERR, "mDNS: avahi-daemon is unavailable; this machine cannot be discovered");
-        broadcast_local_event(build_mdns_status().dump());
+        broadcast_local_event(build_mdns_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     bool ufw_enabled(std::string_view ufw_conf) {
@@ -610,7 +628,7 @@ namespace tether {
         if (g_bt_scan_busy.exchange(true)) {
             event["success"] = false;
             event["message"] = _("A Bluetooth scan is already running.");
-            broadcast_local_event(event.dump());
+            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             return;
         }
 
@@ -620,13 +638,13 @@ namespace tether {
         const bool ok =
             bluetooth::g_bluez &&
             bluetooth::scan_devices(
-                *bluetooth::g_bluez, BT_SCAN_SECONDS, []() { broadcast_local_event(build_bt_devices().dump()); }, err);
+                *bluetooth::g_bluez, BT_SCAN_SECONDS, []() { broadcast_local_event(build_bt_devices().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)); }, err);
 
         g_bt_scan_busy = false;
         event["success"] = ok;
         event["message"] = ok ? _("Bluetooth scan finished.") : (err.empty() ? _("Bluetooth is unavailable.") : err);
-        broadcast_local_event(build_bt_devices().dump());
-        broadcast_local_event(event.dump());
+        broadcast_local_event(build_bt_devices().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+        broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     static void set_operation_id(nlohmann::json& event, const std::string& operation_id) {
@@ -652,11 +670,11 @@ namespace tether {
             if (success) {
                 nlohmann::json message = bluetooth::to_json(sent);
                 message["command"] = "bt_message";
-                broadcast_local_event(message.dump());
+                broadcast_local_event(message.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             } else {
                 event["message"] = err;
             }
-            broadcast_local_event(event.dump());
+            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             if (on_done)
                 on_done(success, err);
         }).detach();
@@ -674,7 +692,7 @@ namespace tether {
         event["command"] = "bt_pair_confirm_request";
         event["code"] = code;
         set_operation_id(event, operation_id);
-        broadcast_local_event(event.dump());
+        broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
 
         std::unique_lock<std::mutex> lock(g_bt_confirm_mutex);
         g_bt_confirm_cv.wait_for(
@@ -713,7 +731,7 @@ namespace tether {
             event["status"] = "error";
             event["message"] = _("Bluetooth is unavailable.");
             set_operation_id(event, operation_id);
-            broadcast_local_event(event.dump());
+            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             return;
         }
 
@@ -724,7 +742,7 @@ namespace tether {
             event["status"] = "busy";
             event["message"] = _("Another pairing attempt is already in progress.");
             set_operation_id(event, operation_id);
-            broadcast_local_event(event.dump());
+            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             return;
         }
 
@@ -739,7 +757,7 @@ namespace tether {
                 event["step"] = step;
                 event["detail"] = detail;
                 set_operation_id(event, operation_id);
-                broadcast_local_event(event.dump());
+                broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             },
             [operation_id](const std::string& code) { return ask_client_to_confirm(code, operation_id); },
             config.calls_enabled);
@@ -749,8 +767,8 @@ namespace tether {
         g_bt_pair_busy = false;
         nlohmann::json event = bluetooth::to_json(result);
         set_operation_id(event, operation_id);
-        broadcast_local_event(event.dump());
-        broadcast_local_event(build_bt_status().dump());
+        broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     // Set while a listen runs; seconds:0 from a client sets the cancel flag.
@@ -769,7 +787,7 @@ namespace tether {
             event["address"] = "";
             event["dual_bond"] = false;
             set_operation_id(event, operation_id);
-            broadcast_local_event(event.dump());
+            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
         };
 
         if (!bluetooth::g_bluez) {
@@ -798,7 +816,7 @@ namespace tether {
                 event["step"] = step;
                 event["detail"] = detail;
                 set_operation_id(event, operation_id);
-                broadcast_local_event(event.dump());
+                broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             },
             [operation_id](const std::string& code) { return ask_client_to_confirm(code, operation_id); },
             g_bt_listen_cancel,
@@ -815,8 +833,8 @@ namespace tether {
         g_bt_pair_busy = false;
         nlohmann::json event = bluetooth::to_json(result);
         set_operation_id(event, operation_id);
-        broadcast_local_event(event.dump());
-        broadcast_local_event(build_bt_status().dump());
+        broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     // seconds <= 0 stops the listen that is running, if it is the caller's (or the caller names none).
@@ -831,7 +849,7 @@ namespace tether {
             bluetooth::g_phone_audio->configure(bluetooth::supervised_address(config), config.phone_audio);
         if (bluetooth::g_bt_connections)
             bluetooth::g_bt_connections->set_device(bluetooth::supervised_address(config), config.ancs_enabled);
-        broadcast_local_event(build_bt_status().dump());
+        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     static void run_bt_unpair(const std::string& address, const std::string& operation_id) {
@@ -839,15 +857,15 @@ namespace tether {
             nlohmann::json event{
                 {"command", "bt_unpair_result"}, {"success", false}, {"message", _("Bluetooth is unavailable.")}};
             set_operation_id(event, operation_id);
-            broadcast_local_event(event.dump());
+            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             return;
         }
         auto result = bluetooth::unpair_device(*bluetooth::g_bluez, address);
         nlohmann::json event = bluetooth::to_json(result);
         event["command"] = "bt_unpair_result";
         set_operation_id(event, operation_id);
-        broadcast_local_event(event.dump());
-        broadcast_local_event(build_bt_status().dump());
+        broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     // AirPods only: a manual disconnect of the supervised iPhone would fight its reconnects.
@@ -868,7 +886,7 @@ namespace tether {
                 ok = bluetooth::disconnect_device(*bluetooth::g_bluez, address, err);
         }
         broadcast_local_event(
-            nlohmann::json{{"command", "bt_airpods_connect_result"}, {"success", ok}, {"message", err}}.dump());
+            nlohmann::json{{"command", "bt_airpods_connect_result"}, {"success", ok}, {"message", err}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     nlohmann::json build_bt_threads() {
@@ -1068,7 +1086,7 @@ namespace tether {
         event["path"] = file.path;
         event["filename"] = file.filename;
         event["bytes_written"] = file.bytes_written;
-        broadcast_local_event(event.dump());
+        broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     size_t broadcast_tcp_message(const std::string& msg, int exclude_fd) {
@@ -1119,14 +1137,14 @@ namespace tether {
         nlohmann::json start{{"command", "file_start"}, {"filename", "clipboard.png"}, {"transfer_id", id}};
         start["size"] = png.size();
         start["clipboard"] = kind;
-        std::vector<std::string> out{start.dump()};
+        std::vector<std::string> out{start.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)};
         for (size_t off = 0, idx = 0; off < png.size(); off += CHUNK_BYTES, ++idx) {
             const size_t len = std::min(CHUNK_BYTES, png.size() - off);
             nlohmann::json chunk{{"command", "file_chunk"}, {"transfer_id", id}, {"chunk_index", idx}};
             chunk["data"] = base64_encode(reinterpret_cast<const unsigned char*>(png.data() + off), len);
-            out.push_back(chunk.dump());
+            out.push_back(chunk.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
         }
-        out.push_back(nlohmann::json{{"command", "file_end"}, {"transfer_id", id}}.dump());
+        out.push_back(nlohmann::json{{"command", "file_end"}, {"transfer_id", id}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
         return out;
     }
 
@@ -1213,11 +1231,17 @@ namespace tether {
         if (const std::string app_id = flatpak_app_id(); !app_id.empty())
             base /= std::filesystem::path("app") / app_id;
         std::filesystem::path tether_dir = base / "tether";
-        if (!std::filesystem::exists(tether_dir)) {
-            std::filesystem::create_directories(tether_dir);
-            std::filesystem::permissions(
-                tether_dir, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
-        }
+        std::error_code ignored;
+        std::filesystem::create_directories(base, ignored);
+        // Created 0700 in one step, then judged by lstat: a directory that is not ours, is a symlink, or lets
+        // anyone else in would put the control socket and the lock somewhere another user can reach.
+        if (mkdir(tether_dir.c_str(), 0700) != 0 && errno != EEXIST)
+            throw std::runtime_error("cannot create " + tether_dir.string() + ": " + std::strerror(errno));
+        struct stat dir_stat{};
+        if (lstat(tether_dir.c_str(), &dir_stat) != 0 || !S_ISDIR(dir_stat.st_mode) || dir_stat.st_uid != getuid())
+            throw std::runtime_error(tether_dir.string() + " is not a directory owned by this user");
+        if ((dir_stat.st_mode & 077) != 0 && chmod(tether_dir.c_str(), 0700) != 0)
+            throw std::runtime_error(tether_dir.string() + " is accessible to other users");
         return tether_dir.string();
     }
 
@@ -1283,10 +1307,16 @@ namespace tether {
         }
         std::strncpy(addr.sun_path, socket_path_.c_str(), sizeof(addr.sun_path) - 1);
 
-        if (bind(server_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-            debug::log(ERR, "Failed to bind unix socket: {}", std::strerror(errno));
+        // Created owner-only: with the default umask the socket would exist for a moment with wider access.
+        const mode_t previous_umask = umask(0177);
+        const int bound = bind(server_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        const int bind_errno = errno;
+        umask(previous_umask);
+        if (bound < 0) {
+            debug::log(ERR, "Failed to bind unix socket: {}", std::strerror(bind_errno));
             return false;
         }
+        chmod(socket_path_.c_str(), 0600);
 
         if (listen(server_fd_, SOMAXCONN) < 0) {
             debug::log(ERR, "Failed to listen on unix socket");
@@ -1319,12 +1349,31 @@ namespace tether {
         }
     }
 
+    // A real session has a handful: the CLI, a GUI, a menu helper. Each client costs a buffer and a thread's worth of
+    // attention, so a runaway one cannot be allowed to take the daemon with it.
+    static constexpr size_t MAX_LOCAL_CLIENTS = 64;
+
     void UnixServer::handle_accept(int fd) {
         int client_fd = accept4(fd, nullptr, nullptr, SOCK_CLOEXEC);
         if (client_fd < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 debug::log(ERR, "UnixServer accept error: {}", std::strerror(errno));
             }
+            return;
+        }
+
+        // The directory already keeps other users out; this refuses a process that got in anyway, such as a
+        // setuid helper or a leaked descriptor.
+        ucred peer{};
+        socklen_t peer_len = sizeof(peer);
+        if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &peer, &peer_len) != 0 || peer.uid != getuid()) {
+            debug::log(WARN, "UnixServer: refused a connection from another user");
+            close(client_fd);
+            return;
+        }
+        if (client_buffers_.size() >= MAX_LOCAL_CLIENTS) {
+            debug::log(WARN, "UnixServer: too many clients ({}); refusing one", client_buffers_.size());
+            close(client_fd);
             return;
         }
 
@@ -1367,18 +1416,33 @@ namespace tether {
                 try {
                     nlohmann::json j = nlohmann::json::parse(msg);
 
+                    // With the network listener off these have no peer to talk to, and several would still start
+                    // outbound connections or mDNS browsing.
+                    if (!g_tcp_enabled && j.contains("command") && j["command"].is_string()) {
+                        const std::string command = j["command"];
+                        if (command == "pair_request" || command == "discover" || command == "connect_peer" ||
+                            command == "accept_device" || command == "forget_device" || command == "send_file") {
+                            write_plain_packet(
+                                client_fd,
+                                nlohmann::json{{"error", _("The network listener is turned off on this machine.")}}
+                                        .dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) +
+                                    "\n");
+                            continue;
+                        }
+                    }
+
                     if (j.contains("command") && j["command"] == "subscribe") {
                         register_local_subscriber(client_fd);
-                        write_plain_packet(client_fd, build_protocol_info().dump() + "\n");
-                        std::string payload = build_local_state_snapshot().dump() + "\n";
+                        write_plain_packet(client_fd, build_protocol_info().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
+                        std::string payload = build_local_state_snapshot().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, payload);
 
                         if (Otp otp = otp_peek(); otp && !otp_is_claimed()) {
-                            std::string otp_payload = make_otp_event(otp).dump() + "\n";
+                            std::string otp_payload = make_otp_event(otp).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                             write_plain_packet(client_fd, otp_payload);
                         }
 
-                        write_plain_packet(client_fd, build_bt_connection_status().dump() + "\n");
+                        write_plain_packet(client_fd, build_bt_connection_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
                         continue;
                     } else if (j.contains("command") && j["command"] == "unsubscribe") {
                         unregister_local_subscriber(client_fd);
@@ -1386,20 +1450,20 @@ namespace tether {
                         write_plain_packet(client_fd, payload);
                         continue;
                     } else if (j.contains("command") && j["command"] == "protocol_info") {
-                        write_plain_packet(client_fd, build_protocol_info().dump() + "\n");
+                        write_plain_packet(client_fd, build_protocol_info().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
                         continue;
                     } else if (j.contains("command") && j["command"] == "state_snapshot") {
-                        std::string payload = build_local_state_snapshot().dump() + "\n";
+                        std::string payload = build_local_state_snapshot().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, payload);
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_status") {
-                        std::string payload = build_bt_status().dump() + "\n";
+                        std::string payload = build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, payload);
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_scan") {
                         std::thread(run_bt_scan).detach();
                     } else if (j.contains("command") && j["command"] == "bt_airpods") {
-                        std::string payload = build_bt_airpods().dump() + "\n";
+                        std::string payload = build_bt_airpods().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, payload);
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_airpods_enable" && j.contains("enabled")) {
@@ -1408,19 +1472,19 @@ namespace tether {
                         bluetooth::save_config(config);
                         if (bluetooth::g_airpods)
                             bluetooth::g_airpods->set_enabled(config.airpods_enabled);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_airpods_handoff" && j.contains("enabled")) {
                         auto config = bluetooth::load_config();
                         config.airpods_handoff = j.value("enabled", false);
                         bluetooth::save_config(config);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_airpods_pause" && j.contains("mode")) {
                         auto config = bluetooth::load_config();
                         config.airpods_pause = bluetooth::pause_mode_from_string(j["mode"]);
                         bluetooth::save_config(config);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_airpods_mode" && j.contains("mode")) {
                         const auto mode = bluetooth::anc_mode_from_string(j.value("mode", ""));
@@ -1436,10 +1500,10 @@ namespace tether {
                             bluetooth::g_airpods->set_anc(*mode);
                             reply["success"] = true;
                         }
-                        write_plain_packet(client_fd, reply.dump() + "\n");
+                        write_plain_packet(client_fd, reply.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_list_devices") {
-                        std::string payload = build_bt_devices().dump() + "\n";
+                        std::string payload = build_bt_devices().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, payload);
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_pair" && j.contains("address")) {
@@ -1488,7 +1552,7 @@ namespace tether {
                         bluetooth::save_config(config);
                         std::thread(restart_supervision, config).detach();
                     } else if (j.contains("command") && j["command"] == "bt_list_threads") {
-                        std::string payload = build_bt_threads().dump() + "\n";
+                        std::string payload = build_bt_threads().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, payload);
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_list_contacts") {
@@ -1499,7 +1563,7 @@ namespace tether {
                         write_plain_packet(client_fd, payload);
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_list_messages" && j.contains("thread")) {
-                        std::string payload = build_bt_messages(j["thread"]).dump() + "\n";
+                        std::string payload = build_bt_messages(j["thread"]).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, payload);
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_mark_read" &&
@@ -1526,7 +1590,7 @@ namespace tether {
                                                                     j["before"].get<int64_t>());
                                 bluetooth::save_removed_threads(bluetooth::removed_threads());
                             }
-                            broadcast_local_event(build_bt_threads().dump());
+                            broadcast_local_event(build_bt_threads().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         } else {
                             debug::log(WARN, "bt_remove_thread: needs a thread and an integer before");
                         }
@@ -1550,7 +1614,7 @@ namespace tether {
                                 live.value("pbap_open", false)) {
                                 event["success"] = true;
                                 event["message"] = _("Notification mirroring is already active; nothing to do.");
-                                broadcast_local_event(event.dump());
+                                broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                                 return;
                             }
 
@@ -1565,7 +1629,7 @@ namespace tether {
                                         "Message Notifications off and on in Settings > Bluetooth > (i) -- it can "
                                         "need re-granting even when it already looks enabled.")
                                     : (err.empty() ? _("Bluetooth is unavailable.") : err);
-                            broadcast_local_event(event.dump());
+                            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         }).detach();
                     } else if (j.contains("command") && j["command"] == "bt_set_ancs") {
                         auto config = bluetooth::load_config();
@@ -1577,7 +1641,7 @@ namespace tether {
 
                         bluetooth::set_group_replies_enabled(config.group_messages_enabled &&
                                                              config.ancs_content_enabled && config.ancs_enabled);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "bt_set_adapter") {
                         auto config = bluetooth::load_config();
                         config.adapter = j.value("adapter", "");
@@ -1600,14 +1664,14 @@ namespace tether {
                         // follows this toggle.
                         bluetooth::set_group_replies_enabled(config.group_messages_enabled &&
                                                              config.ancs_content_enabled && config.ancs_enabled);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "bt_set_calls") {
                         auto config = bluetooth::load_config();
                         config.calls_enabled = j.value("enabled", false);
                         bluetooth::save_config(config);
                         if (bluetooth::g_bt_connections)
                             bluetooth::g_bt_connections->set_calls_enabled(config.calls_enabled);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "bt_set_lock_on_away") {
                         auto config = bluetooth::load_config();
                         config.lock_on_away = j.value("enabled", false);
@@ -1617,19 +1681,19 @@ namespace tether {
                         if (bluetooth::g_bt_connections)
                             bluetooth::g_bt_connections->set_lock_on_away(config.lock_on_away,
                                                                           config.lock_away_seconds);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "bt_set_yield_when_inactive") {
                         auto config = bluetooth::load_config();
                         config.yield_when_inactive = j.value("enabled", false);
                         bluetooth::save_config(config);
                         if (bluetooth::g_bt_connections)
                             bluetooth::g_bt_connections->set_yield_when_inactive(config.yield_when_inactive);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "bt_set_contacts_by_last_name") {
                         auto config = bluetooth::load_config();
                         config.contacts_by_last_name = j.value("enabled", false);
                         bluetooth::save_config(config);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "bt_set_phone_audio") {
                         auto config = bluetooth::load_config();
                         // "route" from the CLI, "enabled" from the TUI's switches.
@@ -1647,36 +1711,36 @@ namespace tether {
                                 if (bluetooth::g_bluez)
                                     bluetooth::g_phone_audio->apply_now(bluetooth::g_bluez->connection());
                             }
-                            broadcast_local_event(build_bt_status().dump());
+                            broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         }).detach();
                     } else if (j.contains("command") && j["command"] == "bt_hold" && j.contains("profile")) {
                         if (bluetooth::g_bt_connections &&
                             bluetooth::g_bt_connections->set_hold(j.value("profile", ""), j.value("held", true)))
-                            broadcast_local_event(build_bt_status().dump());
+                            broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "set_desktop_popups") {
                         auto config = bluetooth::load_config();
                         config.desktop_popups_enabled = j.value("enabled", true);
                         bluetooth::save_config(config);
                         set_desktop_popups_enabled(config.desktop_popups_enabled);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "set_popup_previews") {
                         auto config = bluetooth::load_config();
                         config.popup_previews_enabled = j.value("enabled", true);
                         bluetooth::save_config(config);
                         set_popup_previews_enabled(config.popup_previews_enabled);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "set_clipboard_auto_share") {
                         auto config = bluetooth::load_config();
                         config.clipboard_auto_share = j.value("enabled", true);
                         bluetooth::save_config(config);
                         set_clipboard_auto_share(config.clipboard_auto_share);
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "set_hide_unknown_senders") {
                         auto config = bluetooth::load_config();
                         config.hide_unknown_senders = j.value("enabled", false);
                         bluetooth::save_config(config);
-                        broadcast_local_event(build_bt_status().dump());
-                        broadcast_local_event(build_bt_threads().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+                        broadcast_local_event(build_bt_threads().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "bt_list_calls") {
                         nlohmann::json payload;
                         payload["command"] = "bt_calls";
@@ -1702,8 +1766,8 @@ namespace tether {
                                              bluetooth::g_bt_connections->dial(j.value("number", std::string{}), err);
                         if (!payload["success"])
                             payload["message"] = err;
-                        broadcast_local_event(payload.dump());
-                        write_plain_packet(client_fd, payload.dump() + "\n");
+                        broadcast_local_event(payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+                        write_plain_packet(client_fd, payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_call_action" && j.contains("action")) {
                         const std::string action = j.value("action", std::string{});
@@ -1716,8 +1780,8 @@ namespace tether {
                             bluetooth::g_bt_connections->call_action(j.value("path", std::string{}), action, err);
                         if (!payload["success"])
                             payload["message"] = err;
-                        broadcast_local_event(payload.dump());
-                        write_plain_packet(client_fd, payload.dump() + "\n");
+                        broadcast_local_event(payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+                        write_plain_packet(client_fd, payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_call_tones" && j.contains("tones")) {
                         std::string err = _("Bluetooth is unavailable.");
@@ -1728,8 +1792,8 @@ namespace tether {
                                                                                 j.value("tones", std::string{}), err);
                         if (!payload["success"])
                             payload["message"] = err;
-                        broadcast_local_event(payload.dump());
-                        write_plain_packet(client_fd, payload.dump() + "\n");
+                        broadcast_local_event(payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+                        write_plain_packet(client_fd, payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_set_retention" && j.contains("retention")) {
                         auto config = bluetooth::load_config();
@@ -1751,7 +1815,7 @@ namespace tether {
                                 bluetooth::move_retained_store(previous, config.retention);
                             }
                         }
-                        broadcast_local_event(build_bt_status().dump());
+                        broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "bt_list_notifications") {
                         nlohmann::json payload;
                         payload["command"] = "bt_notifications";
@@ -1773,14 +1837,14 @@ namespace tether {
                             bluetooth::g_bt_connections->perform_notification_action(
                                 j["uid"].get<uint32_t>(),
                                 positive ? bluetooth::ancs::ActionId::Positive : bluetooth::ancs::ActionId::Negative);
-                        broadcast_local_event(payload.dump());
+                        broadcast_local_event(payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                     } else if (j.contains("command") && j["command"] == "bt_connection") {
-                        std::string out = build_bt_connection_status().dump() + "\n";
+                        std::string out = build_bt_connection_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, out);
                         continue;
                     } else if (j.contains("command") && j["command"] == "bt_diagnostics") {
                         nlohmann::json connection = build_bt_connection_status();
-                        std::string out = bluetooth::build_diagnostics(build_bt_status(), connection).dump() + "\n";
+                        std::string out = bluetooth::build_diagnostics(build_bt_status(), connection).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, out);
                         continue;
                     } else if (j.contains("command") && j["command"] == "clipboard_set" && j.contains("content")) {
@@ -1792,7 +1856,7 @@ namespace tether {
                             nlohmann::json resp;
                             resp["command"] = "clipboard_content";
                             resp["content"] = g_wayland->get_clipboard();
-                            std::string payload = resp.dump() + "\n";
+                            std::string payload = resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                             write_plain_packet(client_fd, payload);
                             continue;
                         }
@@ -1822,7 +1886,7 @@ namespace tether {
                         // Claimed by the first site that polls for it, so the next site
                         // the user visits doesn't get handed the previous site's code.
                         Otp otp = otp_take_for_host(j.value("url", std::string{}));
-                        std::string payload = make_otp_event(otp).dump() + "\n";
+                        std::string payload = make_otp_event(otp).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         write_plain_packet(client_fd, payload);
                         continue;
                     } else if (j.contains("command") && j["command"] == "consume_otp") {
@@ -1844,7 +1908,7 @@ namespace tether {
                             nlohmann::json resp;
                             resp["command"] = "error";
                             resp["message"] = target.empty() ? "no_connected_mobile_client" : "target_not_connected";
-                            std::string payload = resp.dump() + "\n";
+                            std::string payload = resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                             write_plain_packet(client_fd, payload);
                             continue;
                         }
@@ -1853,7 +1917,7 @@ namespace tether {
                             resp["command"] = "file_status";
                             resp["transfer_id"] = j["transfer_id"];
                             resp["status"] = "success";
-                            std::string payload = resp.dump() + "\n";
+                            std::string payload = resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                             write_plain_packet(client_fd, payload);
                             continue;
                         }
@@ -1864,15 +1928,15 @@ namespace tether {
                         nlohmann::json response{{"command", "accept_device_result"},
                                                 {"accepted", !print.empty()},
                                                 {"connected", connected}};
-                        write_plain_packet(client_fd, response.dump() + "\n");
+                        write_plain_packet(client_fd, response.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
                         continue;
                     } else if (j.contains("command") && j["command"] == "forget_device" && j.contains("fingerprint")) {
                         const std::string print = j.value("fingerprint", "");
                         const bool forgotten = tcp_server_.forget_device(print);
                         nlohmann::json response{
                             {"command", "forget_device_result"}, {"fingerprint", print}, {"forgotten", forgotten}};
-                        write_plain_packet(client_fd, response.dump() + "\n");
-                        broadcast_local_event(response.dump());
+                        write_plain_packet(client_fd, response.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
+                        broadcast_local_event(response.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         continue;
                     } else if (j.contains("command") && j["command"] == "pair_request" && j.contains("host")) {
                         const std::string target_host = j["host"];
@@ -1902,7 +1966,7 @@ namespace tether {
                                 payload["devices"].push_back(d);
                             }
                             set_discovered_devices(payload["devices"]);
-                            broadcast_local_event(payload.dump());
+                            broadcast_local_event(payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         }).detach();
                     } else if (j.contains("command") && j["command"] == "send_file" && j.contains("path")) {
                         std::string path = j["path"];
@@ -1925,11 +1989,18 @@ namespace tether {
                                 resp["message"] =
                                     tr_format(_("Send failed: {}"), _("Could not reach the Tether daemon."));
                             }
-                            broadcast_local_event(resp.dump());
+                            broadcast_local_event(resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         }).detach();
                         continue; // skip the "OK\n" below because we reply asynchronously
                     }
+                } catch (const std::exception& e) {
+                    // Not "OK": the caller would take a request that failed for one that worked.
+                    debug::log(WARN, "UnixServer: request failed: {}", e.what());
+                    write_plain_packet(client_fd, "{\"error\":\"request failed\"}\n");
+                    continue;
                 } catch (...) {
+                    write_plain_packet(client_fd, "{\"error\":\"request failed\"}\n");
+                    continue;
                 }
 
                 std::string response = "OK\n";
@@ -2201,7 +2272,7 @@ namespace tether {
                                      {"device_name", peer_name},
                                      {"address", host},
                                      {"reason", reason}};
-                broadcast_local_event(event.dump());
+                broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             };
 
             addrinfo hints{};
@@ -2338,7 +2409,7 @@ namespace tether {
                     gethostname(hostname, sizeof(hostname) - 1);
 
                     nlohmann::json request{{"command", "pair_request"}, {"device_name", hostname}};
-                    const std::string payload = request.dump() + "\n";
+                    const std::string payload = request.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                     robust_ssl_write(ssl, payload.c_str(), payload.size());
 
                     debug::log(INFO, "TcpServer: Pair request sent to {} ({})", client_info_[client_fd].address, print);
@@ -2349,7 +2420,7 @@ namespace tether {
                     event["address"] = client_info_[client_fd].address;
                     event["fingerprint"] = print;
                     event["device_name"] = "Unknown Device";
-                    broadcast_local_event(event.dump());
+                    broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                 }
             } else {
                 const int ssl_err = errno;
@@ -2433,7 +2504,7 @@ namespace tether {
                                                  {"device_name", dev_name},
                                                  {"address", client_info_[client_fd].address},
                                                  {"connected", true}};
-                            broadcast_local_event(event.dump());
+                            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         } else if (command == "pair_pending") {
                             const std::string peer = j.value("device_name", client_info_[client_fd].address);
                             client_info_[client_fd].device_name = peer;
@@ -2443,7 +2514,7 @@ namespace tether {
                                                  {"fingerprint", print},
                                                  {"device_name", peer},
                                                  {"address", client_info_[client_fd].address}};
-                            broadcast_local_event(event.dump());
+                            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         } else {
                             debug::log(INFO,
                                        "TcpServer: {} refused the pair request ({})",
@@ -2453,7 +2524,7 @@ namespace tether {
                                                  {"fingerprint", print},
                                                  {"device_name", client_info_[client_fd].device_name},
                                                  {"address", client_info_[client_fd].address}};
-                            broadcast_local_event(event.dump());
+                            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                             drop_client(client_fd);
                             return;
                         }
@@ -2484,7 +2555,7 @@ namespace tether {
                             nlohmann::json resp;
                             resp["command"] = "pair_pending";
                             resp["device_name"] = hostname;
-                            std::string payload = resp.dump() + "\n";
+                            std::string payload = resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                             robust_ssl_write(ssl, payload.c_str(), payload.size());
 
                             nlohmann::json event;
@@ -2492,7 +2563,7 @@ namespace tether {
                             event["fingerprint"] = print;
                             event["device_name"] = dev_name;
                             event["address"] = client_info_[client_fd].address;
-                            broadcast_local_event(event.dump());
+                            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
 
                             // Launch the layer-shell dialog for interactive approval
                             spawn_pair_dialog(client_fd, ssl, print, dev_name);
@@ -2511,7 +2582,7 @@ namespace tether {
                         nlohmann::json bc;
                         bc["command"] = "clipboard_updated";
                         bc["content"] = content;
-                        broadcast_message(bc.dump(), client_fd);
+                        broadcast_message(bc.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), client_fd);
                     } else if (j.contains("command") && j["command"] == "hello") {
                         // feature negotiation. old daemons answer "OK"
                         const auto features = j.value("features", nlohmann::json::array());
@@ -2531,7 +2602,7 @@ namespace tether {
                                                  {"address", remote.address},
                                                  {"paired", true},
                                                  {"device", remote.device}};
-                            broadcast_local_event(event.dump());
+                            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         }
                         nlohmann::json resp{{"command", "hello"}};
                         resp["features"] = nlohmann::json::array({"clipboard_image"});
@@ -2540,7 +2611,7 @@ namespace tether {
                             // the phone dials this for the camera stream
                             resp["port"] = bind_port_;
                         }
-                        std::string payload = resp.dump() + "\n";
+                        std::string payload = resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                         robust_ssl_write(ssl, payload.c_str(), payload.size());
                         continue;
                     } else if (j.contains("command") && j["command"] == "camera_start") {
@@ -2574,7 +2645,7 @@ namespace tether {
                             nlohmann::json resp;
                             resp["command"] = "clipboard_content";
                             resp["content"] = g_wayland->get_clipboard();
-                            std::string payload = resp.dump() + "\n";
+                            std::string payload = resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                             robust_ssl_write(ssl, payload.c_str(), payload.size());
                             continue;
                         }
@@ -2600,7 +2671,7 @@ namespace tether {
                             broadcast_clipboard_image(png, client_fd);
                             nlohmann::json resp{{"command", "file_status"}, {"status", "success"}};
                             resp["transfer_id"] = j["transfer_id"];
-                            std::string payload = resp.dump() + "\n";
+                            std::string payload = resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                             robust_ssl_write(ssl, payload.c_str(), payload.size());
                             continue;
                         }
@@ -2611,7 +2682,7 @@ namespace tether {
                             resp["command"] = "file_status";
                             resp["transfer_id"] = j["transfer_id"];
                             resp["status"] = saved ? "success" : "error";
-                            std::string payload = resp.dump() + "\n";
+                            std::string payload = resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                             robust_ssl_write(ssl, payload.c_str(), payload.size());
                             continue;
                         }
@@ -2647,7 +2718,7 @@ namespace tether {
                 event["fingerprint"] = it->second.fingerprint;
                 event["device_name"] = it->second.device_name;
                 event["paired"] = it->second.paired;
-                broadcast_local_event(event.dump());
+                broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             }
             drop_client(client_fd);
         }
@@ -2685,7 +2756,7 @@ namespace tether {
                                        {"address", remote_it->second.address},
                                        {"paired", true},
                                        {"device", remote_it->second.device}};
-        broadcast_local_event(connected_event.dump());
+        broadcast_local_event(connected_event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     void TcpServer::set_peers_changed_callback(std::function<void()> callback) { peers_changed_ = std::move(callback); }
@@ -2711,7 +2782,7 @@ namespace tether {
                                  {"fingerprint", it->second.fingerprint},
                                  {"device_name", it->second.device_name},
                                  {"paired", it->second.paired}};
-            broadcast_local_event(event.dump());
+            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             drop_client(client_fd);
         }
 
@@ -2753,7 +2824,7 @@ namespace tether {
 
             // We are the approver here, so the peer is told its request went through.
             nlohmann::json response{{"command", "pair_accepted"}};
-            const std::string payload = response.dump() + "\n";
+            const std::string payload = response.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
             robust_ssl_write(ssl_it->second, payload.c_str(), payload.size());
         }
 
@@ -2762,7 +2833,7 @@ namespace tether {
                              {"device_name", device_name},
                              {"address", address},
                              {"connected", promoted}};
-        broadcast_local_event(event.dump());
+        broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
 
         if (!promoted && peers_changed_)
             peers_changed_();
@@ -2925,12 +2996,12 @@ namespace tether {
                 if (remote_it != connected_remote_clients.end()) {
                     event["address"] = remote_it->second.address;
                 }
-                broadcast_local_event(event.dump());
+                broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
 
                 if (ssl_it != active_ssl_.end()) {
                     nlohmann::json resp;
                     resp["command"] = "pair_rejected";
-                    std::string payload = resp.dump() + "\n";
+                    std::string payload = resp.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
                     robust_ssl_write(ssl_it->second, payload.c_str(), payload.size());
                 }
             }

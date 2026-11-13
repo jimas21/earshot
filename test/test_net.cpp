@@ -411,6 +411,136 @@ namespace {
         EXPECT_EQ(result.value("operation_id", ""), "web-unpair-1");
     }
 
+    // Opens a connection to the daemon socket the way a client would.
+    static int connect_to_daemon(int timeout_seconds = 2) {
+        const int client = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (client < 0)
+            return -1;
+        timeval timeout{timeout_seconds, 0};
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        std::snprintf(
+            address.sun_path, sizeof(address.sun_path), "%s", (tether::get_runtime_dir() + "/tetherd.sock").c_str());
+        if (connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+            close(client);
+            return -1;
+        }
+        return client;
+    }
+
+    TEST(UnixServerTest, ListeningForAPhoneAnswersWithItsOperationIdAndAdvertisesTheCapability) {
+        const std::string runtime_dir = unique_test_dir("tether_unix_listen_test");
+        CleanupGuard cleanup_guard(runtime_dir);
+        std::filesystem::remove_all(runtime_dir);
+        std::filesystem::create_directories(runtime_dir);
+        ScopedEnvVar xdg_runtime_dir("XDG_RUNTIME_DIR", runtime_dir);
+
+        tether::EpollEventLoop loop;
+        tether::TcpServer tcp_server(loop, 0);
+        tether::UnixServer unix_server(loop, tcp_server);
+        ASSERT_TRUE(unix_server.start());
+        EventLoopGuard loop_guard(loop);
+
+        const int client = connect_to_daemon();
+        ASSERT_GE(client, 0);
+
+        const std::string info = "{\"command\":\"protocol_info\"}\n";
+        ASSERT_EQ(write(client, info.data(), info.size()), static_cast<ssize_t>(info.size()));
+        const auto protocol = nlohmann::json::parse(read_socket_line(client));
+        const auto& caps = protocol["capabilities"];
+        EXPECT_NE(std::find(caps.begin(), caps.end(), "bluetooth.pair_listen"), caps.end());
+
+        const std::string subscribe = "{\"command\":\"subscribe\"}\n";
+        ASSERT_EQ(write(client, subscribe.data(), subscribe.size()), static_cast<ssize_t>(subscribe.size()));
+        ASSERT_FALSE(read_socket_line(client).empty());
+
+        // Stopping a listen that is not running is quiet; starting one with no Bluetooth reports an error.
+        const std::string stop = "{\"command\":\"bt_pair_listen\",\"operation_id\":\"l-0\",\"seconds\":0}\n";
+        ASSERT_EQ(write(client, stop.data(), stop.size()), static_cast<ssize_t>(stop.size()));
+        const std::string listen = "{\"command\":\"bt_pair_listen\",\"operation_id\":\"l-1\",\"seconds\":30}\n";
+        ASSERT_EQ(write(client, listen.data(), listen.size()), static_cast<ssize_t>(listen.size()));
+
+        nlohmann::json result;
+        for (int event = 0; event < 8; ++event) {
+            const std::string line = read_socket_line(client);
+            if (line.empty())
+                break;
+            try {
+                auto candidate = nlohmann::json::parse(line);
+                if (candidate.value("command", "") == "bt_pair_result") {
+                    result = std::move(candidate);
+                    break;
+                }
+            } catch (...) {
+            }
+        }
+        close(client);
+
+        ASSERT_FALSE(result.is_null());
+        EXPECT_EQ(result.value("operation_id", ""), "l-1");
+        EXPECT_FALSE(result.value("success", true));
+        EXPECT_TRUE(result.contains("dual_bond"));
+        EXPECT_TRUE(result.contains("address"));
+    }
+
+    TEST(UnixServerTest, TheSocketIsOwnerOnlyAndAMalformedRequestIsAnErrorNotOk) {
+        const std::string runtime_dir = unique_test_dir("tether_unix_hardening_test");
+        CleanupGuard cleanup_guard(runtime_dir);
+        std::filesystem::remove_all(runtime_dir);
+        std::filesystem::create_directories(runtime_dir);
+        ScopedEnvVar xdg_runtime_dir("XDG_RUNTIME_DIR", runtime_dir);
+
+        tether::EpollEventLoop loop;
+        tether::TcpServer tcp_server(loop, 0);
+        tether::UnixServer unix_server(loop, tcp_server);
+        ASSERT_TRUE(unix_server.start());
+        EventLoopGuard loop_guard(loop);
+
+        struct stat socket_stat{};
+        ASSERT_EQ(stat((tether::get_runtime_dir() + "/tetherd.sock").c_str(), &socket_stat), 0);
+        EXPECT_EQ(socket_stat.st_mode & 077, 0u);
+        struct stat dir_stat{};
+        ASSERT_EQ(stat(tether::get_runtime_dir().c_str(), &dir_stat), 0);
+        EXPECT_EQ(dir_stat.st_mode & 077, 0u);
+
+        const int client = connect_to_daemon();
+        ASSERT_GE(client, 0);
+        const std::string garbage = "this is not json\n";
+        ASSERT_EQ(write(client, garbage.data(), garbage.size()), static_cast<ssize_t>(garbage.size()));
+        const std::string reply = read_socket_line(client);
+        close(client);
+        EXPECT_NE(reply, "OK");
+        EXPECT_NE(reply.find("error"), std::string::npos) << reply;
+    }
+
+    TEST(UnixServerTest, NetworkCommandsAreRefusedWhenTheNetworkListenerIsOff) {
+        const std::string runtime_dir = unique_test_dir("tether_unix_no_tcp_test");
+        CleanupGuard cleanup_guard(runtime_dir);
+        std::filesystem::remove_all(runtime_dir);
+        std::filesystem::create_directories(runtime_dir);
+        ScopedEnvVar xdg_runtime_dir("XDG_RUNTIME_DIR", runtime_dir);
+
+        tether::EpollEventLoop loop;
+        tether::TcpServer tcp_server(loop, 0);
+        tether::UnixServer unix_server(loop, tcp_server);
+        ASSERT_TRUE(unix_server.start());
+        EventLoopGuard loop_guard(loop);
+
+        tether::set_tcp_enabled(false);
+        const int client = connect_to_daemon();
+        ASSERT_GE(client, 0);
+        for (const char* command : {"pair_request", "discover", "accept_device", "forget_device", "send_file"}) {
+            const std::string request = std::string("{\"command\":\"") + command +
+                                        "\",\"host\":\"192.0.2.1\",\"fingerprint\":\"x\",\"path\":\"/nope\"}\n";
+            ASSERT_EQ(write(client, request.data(), request.size()), static_cast<ssize_t>(request.size()));
+            const std::string reply = read_socket_line(client);
+            EXPECT_NE(reply.find("error"), std::string::npos) << command << ": " << reply;
+        }
+        close(client);
+        tether::set_tcp_enabled(true);
+    }
+
     TEST(UnixServerTest, FileSendCompletionEchoesOptionalOperationId) {
         const std::string runtime_dir = unique_test_dir("tether_unix_file_send_test");
         CleanupGuard cleanup_guard(runtime_dir);

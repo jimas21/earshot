@@ -180,33 +180,9 @@ namespace tether::bluetooth {
         if (path.empty())
             return false;
 
-        std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-
-        // Write-then-rename so a crash mid-write cannot leave a truncated config,
-        // matching how Crypto persists known_hosts.json.
-        std::string tmp = path + ".tmp";
-        {
-            std::ofstream out(tmp, std::ios::trunc);
-            if (!out.is_open()) {
-                debug::log(ERR, "bluetooth: cannot write {}", tmp);
-                return false;
-            }
-            out << serialize_config(config);
-            if (!out) {
-                debug::log(ERR, "bluetooth: failed writing {}", tmp);
-                return false;
-            }
-        }
-
-        std::filesystem::permissions(tmp,
-                                     std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-                                     std::filesystem::perm_options::replace,
-                                     ec);
-        std::filesystem::rename(tmp, path, ec);
-        if (ec) {
-            debug::log(ERR, "bluetooth: cannot replace {}: {}", path, ec.message());
-            std::filesystem::remove(tmp, ec);
+        // Owner-only from creation, fsynced, then renamed over the old file: a crash cannot leave a truncated config
+        if (!paths::write_private_file(path, serialize_config(config))) {
+            debug::log(ERR, "bluetooth: cannot write {}", path);
             return false;
         }
         return true;

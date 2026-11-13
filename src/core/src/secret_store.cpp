@@ -248,28 +248,8 @@ namespace tether {
                 if (path.empty())
                     return false;
 
-                std::error_code ec;
-                std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-
-                const std::string tmp = path + ".tmp";
-                {
-                    std::ofstream out(tmp, std::ios::trunc);
-                    if (!out.is_open()) {
-                        debug::log(ERR, "secret: cannot write {}", tmp);
-                        return false;
-                    }
-                    out << base64_encode(key) << "\n";
-                    if (!out)
-                        return false;
-                }
-                std::filesystem::permissions(tmp,
-                                             std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-                                             std::filesystem::perm_options::replace,
-                                             ec);
-                std::filesystem::rename(tmp, path, ec);
-                if (ec) {
-                    debug::log(ERR, "secret: cannot replace {}: {}", path, ec.message());
-                    std::filesystem::remove(tmp, ec);
+                if (!paths::write_private_file(path, base64_encode(key) + "\n")) {
+                    debug::log(ERR, "secret: cannot write {}", path);
                     return false;
                 }
                 return true;

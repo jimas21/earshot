@@ -1,5 +1,6 @@
 #include "tether/crypto.hpp"
 #include <cstdlib>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -156,10 +157,16 @@ namespace tether {
 
         X509_sign(x509, pkey, EVP_sha256());
 
-        FILE* f_key = fopen(key_path_.c_str(), "wb");
-        if (f_key) {
+        // The private key is created owner-only, never readable by others even for a moment
+        unlink(key_path_.c_str());
+        const int key_fd = open(key_path_.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+        if (FILE* f_key = key_fd >= 0 ? fdopen(key_fd, "wb") : nullptr) {
             PEM_write_PrivateKey(f_key, pkey, nullptr, nullptr, 0, nullptr, nullptr);
+            fflush(f_key);
+            fsync(fileno(f_key));
             fclose(f_key);
+        } else if (key_fd >= 0) {
+            close(key_fd);
         }
 
         FILE* f_cert = fopen(cert_path_.c_str(), "wb");
@@ -226,28 +233,9 @@ namespace tether {
             j[fingerprint] = name;
         }
 
-        std::string tmp_path = hosts_path_ + ".tmp";
-        {
-            std::ofstream off(tmp_path);
-            if (!off.is_open()) {
-                debug::log(ERR, "Crypto: cannot write {}", tmp_path);
-                return;
-            }
-            off << j.dump(4);
-            off.flush();
-            if (!off) {
-                debug::log(ERR, "Crypto: failed writing {}", tmp_path);
-                return;
-            }
-        }
-
+        if (!paths::write_private_file(hosts_path_, j.dump(4)))
+            debug::log(ERR, "Crypto: cannot write {}", hosts_path_);
         std::error_code ec;
-        std::filesystem::rename(tmp_path, hosts_path_, ec);
-        if (ec) {
-            debug::log(ERR, "Crypto: failed to replace {}: {}", hosts_path_, ec.message());
-            std::filesystem::remove(tmp_path, ec);
-            return;
-        }
         hosts_mtime_ = std::filesystem::last_write_time(hosts_path_, ec);
     }
 

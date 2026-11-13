@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 namespace tether::paths {
 
@@ -20,5 +21,10 @@ namespace tether::paths {
 
     // $XDG_STATE_HOME/tether, else ~/.local/state/tether.
     std::filesystem::path state_dir();
+
+    // Replaces `path` with `content`, readable by the owner alone from the first byte: the temporary file is
+    // created O_EXCL with mode 0600, written, fsynced and renamed over the target, and the directory is fsynced
+    // so the rename survives a crash. Never leaves a truncated or world-readable file. False on any failure.
+    bool write_private_file(const std::filesystem::path& path, const std::string& content);
 
 } // namespace tether::paths

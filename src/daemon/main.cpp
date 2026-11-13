@@ -19,6 +19,7 @@
 #include <tether/bluetooth/config.hpp>
 #include <tether/bluetooth/connection.hpp>
 #include <tether/bluetooth/contacts.hpp>
+#include <tether/bluetooth/hfp_profile.hpp>
 #include <tether/bluetooth/lan_info.hpp>
 #include <tether/bluetooth/monitor.hpp>
 #include <tether/bluetooth/pairing.hpp>
@@ -80,7 +81,10 @@ static uint16_t listen_port() {
 // Address for the TCP listener from TETHER_BIND (numeric IPv4 or IPv6), else every interface.
 static std::string listen_bind_address() {
     const char* value = std::getenv("TETHER_BIND");
-    return value ? value : "";
+    if (!value)
+        return "";
+    // The listener takes numeric addresses only
+    return std::string_view(value) == "localhost" ? "127.0.0.1" : value;
 }
 
 // TETHER_NO_TCP=1 runs without the TCP/mTLS listener: no Wi-Fi pairing or transfers, no mDNS
@@ -130,6 +134,7 @@ int main(int argc, char** argv) {
     g_loop = &loop;
 
     const bool tcp_enabled = !tcp_disabled();
+    tether::set_tcp_enabled(tcp_enabled);
     const std::string bind_address = listen_bind_address();
     // Other machines can only reach, and so only be told about, a listener that is not loopback-only.
     const bool lan_visible = tcp_enabled && !is_loopback_address(bind_address);
@@ -730,6 +735,14 @@ int main(int argc, char** argv) {
         debug::log(INFO, "Bluetooth: {} mode", tether::bluetooth::to_string(cap.mode));
         for (const auto& reason : cap.reasons)
             debug::log(INFO, "Bluetooth: {}", reason);
+
+        // Without root the class of device cannot be set. A Hands-Free record makes BlueZ set its Audio bit,
+        // which is what the iPhone looks at before it offers Messages and Contacts.
+        if (tether::bluetooth::no_root_mode()) {
+            std::string how;
+            tether::bluetooth::ensure_handsfree_record(bluez, how);
+            debug::log(INFO, "Bluetooth: Hands-Free record: {}", how);
+        }
 
         // Supervise the selected iPhone's bearers and OBEX sessions. ANCS is only
         // attempted when the controller can carry it and pairing produced a bond

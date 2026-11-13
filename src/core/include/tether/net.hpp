@@ -28,6 +28,9 @@ namespace tether {
     void register_client_ssl(int fd, SSL* ssl, const std::string& fingerprint);
     void unregister_client_fd(int fd);
     void broadcast_message(const std::string& msg, int exclude_fd = -1);
+    // Whether the TCP/mTLS side exists at all. Off, the commands that reach out to other machines are refused.
+    void set_tcp_enabled(bool enabled);
+
     void register_local_subscriber(int fd);
     void unregister_local_subscriber(int fd);
     void broadcast_local_event(const std::string& msg, int exclude_fd = -1);
