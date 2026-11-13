@@ -9,3 +9,7 @@ _CPack_Packages
 *.tar.gz
 .idea
 packaging/container/.env
+
+# Earshot menu tests
+frame/tests/js/node_modules/
+__pycache__/
