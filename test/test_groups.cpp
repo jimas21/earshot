@@ -284,6 +284,15 @@ TEST(Groups, RosterSurvivesARoundTrip) {
     EXPECT_EQ((*addresses)[0], "tel:+15550000002");
 }
 
+TEST(Groups, InvalidUtf8InARosterStillSerializes) {
+    GroupRoster roster;
+    roster.set("group:name:\xff\xfe", {"tel:+15550000002"});
+
+    std::string saved;
+    ASSERT_NO_THROW(saved = roster.serialize());
+    EXPECT_FALSE(GroupRoster::deserialize(saved).empty());
+}
+
 // A corrupt roster must leave groups read-only rather than routing a reply to
 // whatever happened to survive parsing.
 TEST(Groups, CorruptRosterResolvesToNothing) {

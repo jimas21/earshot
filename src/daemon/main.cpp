@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
                 payload["devices"].push_back(d);
             }
             tether::set_discovered_devices(payload["devices"]);
-            tether::broadcast_local_event(payload.dump());
+            tether::broadcast_local_event(payload.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
         });
 
         tcp_srv.set_peers_changed_callback([&discovery] { discovery.refresh(); });
@@ -297,7 +297,7 @@ int main(int argc, char** argv) {
     tether::bluetooth::PhoneAudioFollower phone_audio;
     tether::bluetooth::ConnectionManager connections(
         bluez,
-        [](const nlohmann::json& status) { tether::broadcast_local_event(status.dump()); },
+        [](const nlohmann::json& status) { tether::broadcast_local_event(status.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)); },
         [&notifier](const tether::bluetooth::Message& message, bool backfill) {
             nlohmann::json event = tether::bluetooth::to_json(message);
             event["command"] = "bt_message";
@@ -585,7 +585,7 @@ int main(int argc, char** argv) {
 
             prev.ear = state.ear;
 
-            tether::broadcast_local_event(tether::bluetooth::to_json(state).dump());
+            tether::broadcast_local_event(tether::bluetooth::to_json(state).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
         },
         [&media](tether::bluetooth::StemPress press) {
             if (press != tether::bluetooth::StemPress::Single)
@@ -724,8 +724,8 @@ int main(int argc, char** argv) {
         loop.addFd(bluez.event_fd(), [&bluez, &follow_airpods, &phone_audio, &place_lan_info](int) {
             bluez.drain();
             place_lan_info();
-            tether::broadcast_local_event(tether::build_bt_devices().dump());
-            tether::broadcast_local_event(tether::build_bt_status().dump());
+            tether::broadcast_local_event(tether::build_bt_devices().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+            tether::broadcast_local_event(tether::build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             follow_airpods();
             phone_audio.update(bluez.snapshot(), bluez.connection());
         });
@@ -800,7 +800,7 @@ int main(int argc, char** argv) {
                     nlohmann::json event;
                     event["command"] = "bt_notification_removed";
                     event["uid"] = uid;
-                    tether::broadcast_local_event(event.dump());
+                    tether::broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                 });
         }
 

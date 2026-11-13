@@ -84,7 +84,7 @@ namespace tether::bluetooth {
     std::string serialize_removed_threads(const RemovedThreads& removed) {
         nlohmann::json j;
         j["removed"] = removed.cutoffs();
-        return secret::seal(j.dump());
+        return secret::seal(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     RemovedThreads deserialize_removed_threads(const std::string& text) {

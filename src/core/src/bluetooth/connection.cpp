@@ -283,7 +283,7 @@ namespace tether::bluetooth {
             event["synced"] = synced;
             if (!last_err.empty())
                 event["message"] = last_err;
-            broadcast_local_event(event.dump());
+            broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
         }).detach();
     }
 

@@ -189,7 +189,7 @@ namespace tether::bluetooth {
             j["contacts"].push_back(std::move(c));
         }
 
-        return secret::seal(j.dump(2));
+        return secret::seal(j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     ContactStore deserialize_contacts(const std::string& text) {

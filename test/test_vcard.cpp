@@ -273,6 +273,22 @@ TEST(ContactStore, SurvivesJsonRoundTrip) {
     EXPECT_EQ(restored.name_for("email:ada@example.com"), "Ada");
 }
 
+// A phone can send any bytes in a name. Saving the cache must not throw on them, or the contact list
+// stops syncing; the bad bytes are replaced, the rest of the card survives.
+TEST(ContactStore, InvalidUtf8InANameStillSerializes) {
+    ContactStore store;
+    store.set(parse_vcards("BEGIN:VCARD\nFN:Ada \xff\xfe Lovelace\nTEL:+15551234567\nEND:VCARD\n"));
+    ASSERT_EQ(store.size(), 1u);
+
+    ScopedStore scope("invalid-utf8");
+    std::string saved;
+    ASSERT_NO_THROW(saved = serialize_contacts(store));
+    ContactStore restored = deserialize_contacts(saved);
+    ASSERT_EQ(restored.size(), 1u);
+    EXPECT_EQ(restored.contacts().at(0).tels.at(0), "+15551234567");
+    EXPECT_EQ(restored.contacts().at(0).name.substr(0, 4), "Ada ");
+}
+
 TEST(ContactStore, CorruptCacheYieldsEmptyStore) {
     EXPECT_EQ(deserialize_contacts("{not json").size(), 0u);
     EXPECT_EQ(deserialize_contacts("").size(), 0u);

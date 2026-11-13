@@ -190,7 +190,7 @@ namespace tether::bluetooth {
         nlohmann::json j;
         for (const auto& [key, addresses] : rosters_)
             j[key] = addresses;
-        return j.dump(2);
+        return j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     GroupRoster GroupRoster::deserialize(const std::string& text) {
