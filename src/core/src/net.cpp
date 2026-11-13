@@ -400,6 +400,7 @@ namespace tether {
         nlohmann::json capabilities = {"airpods",
                                        "bluetooth.connection",
                                        "bluetooth.diagnostics",
+                                       "bluetooth.pair_listen",
                                        "bluetooth.pairing",
                                        "contacts",
                                        "files",
@@ -683,6 +684,25 @@ namespace tether {
         return accepted;
     }
 
+    // What a successful pairing leaves behind in the config, and the supervision it points at the new phone.
+    static void remember_paired_device(bluetooth::Config& config, const bluetooth::PairResult& result) {
+        if (!result.success)
+            return;
+        config.device_address = result.device_address;
+        // A dual bond proves mirroring can work, so it turns the preference back on.
+        // A BR/EDR-only bond must not turn it off.
+        if (result.dual_bond)
+            config.ancs_enabled = true;
+        // Remember the transaction that bonded only when it produced a bond worth repeating.
+        if (result.status == "paired" && result.dual_bond && result.listened == false)
+            config.auth_strategy = result.auth_strategy_used;
+        config.enabled = true;
+        bluetooth::save_config(config);
+        // Point supervision at the device we just bonded with.
+        if (bluetooth::g_bt_connections)
+            bluetooth::g_bt_connections->set_device(bluetooth::supervised_address(config), config.ancs_enabled);
+    }
+
     static void run_bt_pair(const std::string& address,
                             std::optional<bluetooth::AuthStrategy> strategy,
                             const std::string& operation_id) {
@@ -724,27 +744,86 @@ namespace tether {
             [operation_id](const std::string& code) { return ask_client_to_confirm(code, operation_id); },
             config.calls_enabled);
 
-        if (result.success) {
-            config.device_address = result.device_address;
-            // A dual bond proves mirroring can work, so it turns the preference back on.
-            // A BR/EDR-only bond must not turn it off.
-            if (result.dual_bond)
-                config.ancs_enabled = true;
-            // Remember the transaction that bonded only when it produced a bond worth repeating.
-            if (result.status == "paired" && result.dual_bond)
-                config.auth_strategy = result.auth_strategy_used;
-            config.enabled = true;
-            bluetooth::save_config(config);
-            // Point supervision at the device we just bonded with.
-            if (bluetooth::g_bt_connections)
-                bluetooth::g_bt_connections->set_device(bluetooth::supervised_address(config), config.ancs_enabled);
-        }
+        remember_paired_device(config, result);
 
         g_bt_pair_busy = false;
         nlohmann::json event = bluetooth::to_json(result);
         set_operation_id(event, operation_id);
         broadcast_local_event(event.dump());
         broadcast_local_event(build_bt_status().dump());
+    }
+
+    // Set while a listen runs; seconds:0 from a client sets the cancel flag.
+    static std::atomic<bool> g_bt_listen_cancel{false};
+    static std::atomic<bool> g_bt_listening{false};
+    static std::mutex g_bt_listen_mutex;
+    static std::string g_bt_listen_operation_id;
+
+    static void run_bt_listen(const std::string& operation_id, int seconds) {
+        auto send_result = [&](bool success, const std::string& status, const std::string& message) {
+            nlohmann::json event;
+            event["command"] = "bt_pair_result";
+            event["success"] = success;
+            event["status"] = status;
+            event["message"] = message;
+            event["address"] = "";
+            event["dual_bond"] = false;
+            set_operation_id(event, operation_id);
+            broadcast_local_event(event.dump());
+        };
+
+        if (!bluetooth::g_bluez) {
+            send_result(false, "error", _("Bluetooth is unavailable."));
+            return;
+        }
+        if (g_bt_pair_busy.exchange(true)) {
+            send_result(false, "busy", _("Another pairing attempt is already in progress."));
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_bt_listen_mutex);
+            g_bt_listen_operation_id = operation_id;
+        }
+        g_bt_listen_cancel = false;
+        g_bt_listening = true;
+
+        auto config = bluetooth::load_config();
+        auto result = bluetooth::listen_for_pair(
+            *bluetooth::g_bluez,
+            seconds,
+            [operation_id](const std::string& step, const std::string& detail) {
+                nlohmann::json event;
+                event["command"] = "bt_pair_progress";
+                event["step"] = step;
+                event["detail"] = detail;
+                set_operation_id(event, operation_id);
+                broadcast_local_event(event.dump());
+            },
+            [operation_id](const std::string& code) { return ask_client_to_confirm(code, operation_id); },
+            g_bt_listen_cancel,
+            config.calls_enabled);
+
+        result.listened = true;
+        remember_paired_device(config, result);
+
+        g_bt_listening = false;
+        {
+            std::lock_guard<std::mutex> lock(g_bt_listen_mutex);
+            g_bt_listen_operation_id.clear();
+        }
+        g_bt_pair_busy = false;
+        nlohmann::json event = bluetooth::to_json(result);
+        set_operation_id(event, operation_id);
+        broadcast_local_event(event.dump());
+        broadcast_local_event(build_bt_status().dump());
+    }
+
+    // seconds <= 0 stops the listen that is running, if it is the caller's (or the caller names none).
+    static void stop_bt_listen(const std::string& operation_id) {
+        std::lock_guard<std::mutex> lock(g_bt_listen_mutex);
+        if (g_bt_listening && (operation_id.empty() || operation_id == g_bt_listen_operation_id))
+            g_bt_listen_cancel = true;
     }
 
     static void restart_supervision(bluetooth::Config config) {
@@ -1374,6 +1453,16 @@ namespace tether {
                         std::thread([address, strategy, operation_id]() {
                             run_bt_pair(address, strategy, operation_id);
                         }).detach();
+                    } else if (j.contains("command") && j["command"] == "bt_pair_listen") {
+                        // The phone starts this pairing, so there is no address; it ends when the phone bonds,
+                        // the time runs out, or a later call with seconds 0 stops it.
+                        const std::string operation_id = j.value("operation_id", std::string{});
+                        const int seconds = std::clamp(j.value("seconds", 120), 0, 600);
+                        if (seconds == 0) {
+                            stop_bt_listen(operation_id);
+                        } else {
+                            std::thread([operation_id, seconds]() { run_bt_listen(operation_id, seconds); }).detach();
+                        }
                     } else if (j.contains("command") && j["command"] == "bt_pair_confirm") {
                         bool matched = false;
                         {

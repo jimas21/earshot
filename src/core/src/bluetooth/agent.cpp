@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <mutex>
 
 namespace tether::bluetooth {
 
@@ -90,6 +91,8 @@ namespace tether::bluetooth {
 
     struct AgentState {
         GDBusConnection* conn = nullptr;
+        // Guards device_path: callbacks land on the GLib thread, set/get come from the pairing thread
+        mutable std::mutex mutex;
         std::string device_path;
         PairingAgent::ConfirmHandler on_confirm;
         bool calls_enabled = false;
@@ -100,7 +103,14 @@ namespace tether::bluetooth {
 
     namespace {
 
-        bool accepts_device(const AgentState& state, const std::string& device_path) {
+        // An agent made with no device path is listening: the first device to ask is the one being paired, and
+        // from then on it is the only one served.
+        // Only a pairing request can pick the device: a headset reconnecting and asking to authorize a service
+        // while someone is waiting for the phone must not take the slot.
+        bool accepts_device(AgentState& state, const std::string& device_path, bool may_adopt) {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            if (may_adopt && state.device_path.empty() && !device_path.empty())
+                state.device_path = device_path;
             return device_path == state.device_path;
         }
 
@@ -135,7 +145,7 @@ namespace tether::bluetooth {
             const gchar* device = nullptr;
             g_variant_get_child(params, 0, "&o", &device);
             const std::string device_path = device ? device : "";
-            if (!accepts_device(*state, device_path)) {
+            if (!accepts_device(*state, device_path, name == "RequestConfirmation")) {
                 debug::log(WARN, "bluetooth: agent refused {} for unexpected device {}", name, device_path);
                 reject(invocation, "Not the device being paired");
                 return;
@@ -202,10 +212,19 @@ namespace tether::bluetooth {
         unexport_object();
     }
 
-    void PairingAgent::set_device_path(std::string device_path) { state_->device_path = std::move(device_path); }
+    void PairingAgent::set_device_path(std::string device_path) {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        state_->device_path = std::move(device_path);
+    }
 
     bool PairingAgent::accepts_device_path(const std::string& device_path) const {
-        return accepts_device(*state_, device_path);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        return device_path == state_->device_path;
+    }
+
+    std::string PairingAgent::device_path() const {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        return state_->device_path;
     }
 
     const std::string& PairingAgent::path() const { return state_->path; }

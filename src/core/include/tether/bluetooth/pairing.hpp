@@ -2,6 +2,7 @@
 
 #include "tether/bluetooth/config.hpp"
 
+#include <atomic>
 #include <functional>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -23,6 +24,8 @@ namespace tether::bluetooth {
         // Which transaction actually produced the bond, which is not always the
         // one that was asked for: connect-first falls back to an explicit pair.
         AuthStrategy auth_strategy_used = AuthStrategy::ConnectFirst;
+        // The phone started this pairing (listen_for_pair), so no auth strategy of ours produced it.
+        bool listened = false;
     };
 
     // Whether a failed connect-first transaction should be retried as an explicit
@@ -56,6 +59,19 @@ namespace tether::bluetooth {
                            const ProgressFn& progress,
                            const ConfirmFn& confirm,
                            bool calls_enabled = false);
+
+    // Phone-initiated pairing, which needs no experimental BlueZ and no root: the adapter is made discoverable and
+    // pairable for `seconds`, the ANCS solicitation stays on air, and the agent serves whichever phone asks first.
+    // The confirmation reaches `confirm` (the client that started the listen). Returns when the phone has bonded,
+    // nobody came, the user declined, or `cancel` was set. Progress steps: listening, connecting (detail = the
+    // phone's name), confirm, confirmed, paired, settling, soliciting. Status "timeout" means nobody connected.
+    // `dual_bond` is true when the bond carries ANCS.
+    PairResult listen_for_pair(BluezMonitor& monitor,
+                               int seconds,
+                               const ProgressFn& progress,
+                               const ConfirmFn& confirm,
+                               const std::atomic<bool>& cancel,
+                               bool calls_enabled = false);
 
     // Removes the bond so a clean pairing can be retried.
     PairResult unpair_device(BluezMonitor& monitor, const std::string& address);

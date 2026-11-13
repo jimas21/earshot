@@ -1,6 +1,7 @@
 #include "tether/bluetooth/pairing.hpp"
 #include "tether/bluetooth/advert.hpp"
 #include "tether/bluetooth/agent.hpp"
+#include "tether/bluetooth/hfp_profile.hpp"
 #include "tether/bluetooth/monitor.hpp"
 #include "tether/log.hpp"
 #include <tether/i18n.hpp>
@@ -9,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <mutex>
+#include <set>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -123,6 +125,29 @@ namespace tether::bluetooth {
         // Connect() can make BlueZ remove and recreate Device1 between attempts.
         // Resolve the object tree synchronously so Pair() never targets the path
         // of an object that has already disappeared.
+        // The whole object tree, read synchronously, for callers that must not depend on the debounced snapshot.
+        bool live_objects(GDBusConnection* conn, BluezObjects& out) {
+            GError* error = nullptr;
+            GVariant* reply = g_dbus_connection_call_sync(conn,
+                                                          BLUEZ_NAME,
+                                                          "/",
+                                                          OBJECT_MANAGER,
+                                                          "GetManagedObjects",
+                                                          nullptr,
+                                                          G_VARIANT_TYPE("(a{oa{sa{sv}}})"),
+                                                          G_DBUS_CALL_FLAGS_NONE,
+                                                          5000,
+                                                          nullptr,
+                                                          &error);
+            if (!reply) {
+                g_clear_error(&error);
+                return false;
+            }
+            out = parse_managed_objects(reply);
+            g_variant_unref(reply);
+            return true;
+        }
+
         bool lookup_live(GDBusConnection* conn, const std::string& address, Device& out) {
             GError* error = nullptr;
             GVariant* reply = g_dbus_connection_call_sync(conn,
@@ -807,7 +832,9 @@ namespace tether::bluetooth {
 
         // Prefer BR/EDR for the next outbound connection, then let the Classic ACL
         // settle before anything touches LE. Older BlueZ has no such property.
-        set_property(conn, device.path, IFACE_DEVICE, "PreferredBearer", g_variant_new_string("bredr"));
+        const bool bearer_api = !no_root_mode() || monitor.snapshot().experimental_api;
+        if (bearer_api)
+            set_property(conn, device.path, IFACE_DEVICE, "PreferredBearer", g_variant_new_string("bredr"));
         notify(progress, "settling", "waiting for the Classic link to settle");
         std::this_thread::sleep_for(std::chrono::seconds(CLASSIC_SETTLE_SECONDS));
 
@@ -817,7 +844,8 @@ namespace tether::bluetooth {
 
         // Hand the preference back to LE now that Classic has settled. Leaving the
         // bond pinned to BR/EDR keeps the LE half down indefinitely
-        set_property(conn, device.path, IFACE_DEVICE, "PreferredBearer", g_variant_new_string("le"));
+        if (bearer_api)
+            set_property(conn, device.path, IFACE_DEVICE, "PreferredBearer", g_variant_new_string("le"));
 
         // Only now solicit ANCS. This advert is what makes iOS reveal its
         // "Show Message Notifications" and "Sync Contacts" toggles, and it is safe
@@ -846,6 +874,302 @@ namespace tether::bluetooth {
                                   "it this time. To try for notifications, Forget This Device on the iPhone and "
                                   "pair again.";
         }
+        return result;
+    }
+
+    namespace {
+        constexpr int LISTEN_ANCS_WAIT_SECONDS = 25;
+        constexpr int LISTEN_BOND_WAIT_SECONDS = 60;
+
+        bool get_adapter_u32(GDBusConnection* conn, const std::string& adapter, const char* name, uint32_t& out) {
+            GError* error = nullptr;
+            GVariant* reply = g_dbus_connection_call_sync(conn,
+                                                          BLUEZ_NAME,
+                                                          adapter.c_str(),
+                                                          IFACE_PROPS,
+                                                          "Get",
+                                                          g_variant_new("(ss)", IFACE_ADAPTER, name),
+                                                          G_VARIANT_TYPE("(v)"),
+                                                          G_DBUS_CALL_FLAGS_NONE,
+                                                          5000,
+                                                          nullptr,
+                                                          &error);
+            if (!reply) {
+                g_clear_error(&error);
+                return false;
+            }
+            GVariant* boxed = nullptr;
+            g_variant_get(reply, "(v)", &boxed);
+            const bool ok = boxed && g_variant_is_of_type(boxed, G_VARIANT_TYPE_UINT32);
+            if (ok)
+                out = g_variant_get_uint32(boxed);
+            if (boxed)
+                g_variant_unref(boxed);
+            g_variant_unref(reply);
+            return ok;
+        }
+
+        // Makes the adapter visible and pairable for a bounded time using BlueZ's own timeouts, so an engine that
+        // dies mid-listen cannot leave the headset discoverable. Puts everything back on every exit path.
+        class ListenWindow {
+        public:
+            ListenWindow(GDBusConnection* conn, std::string adapter, int seconds)
+                : conn_(conn), adapter_(std::move(adapter)) {
+                was_pairable_ = get_adapter_bool(conn_, adapter_, "Pairable");
+                was_discoverable_ = get_adapter_bool(conn_, adapter_, "Discoverable");
+                have_pairable_timeout_ = get_adapter_u32(conn_, adapter_, "PairableTimeout", pairable_timeout_);
+                have_discoverable_timeout_ =
+                    get_adapter_u32(conn_, adapter_, "DiscoverableTimeout", discoverable_timeout_);
+                const guint32 window = static_cast<guint32>(std::max(1, seconds));
+                set("PairableTimeout", g_variant_new_uint32(window));
+                set("DiscoverableTimeout", g_variant_new_uint32(window));
+                set("Pairable", g_variant_new_boolean(TRUE));
+                set("Discoverable", g_variant_new_boolean(TRUE));
+            }
+
+            ~ListenWindow() {
+                set("Discoverable", g_variant_new_boolean(was_discoverable_));
+                set("Pairable", g_variant_new_boolean(was_pairable_));
+                if (have_discoverable_timeout_)
+                    set("DiscoverableTimeout", g_variant_new_uint32(discoverable_timeout_));
+                if (have_pairable_timeout_)
+                    set("PairableTimeout", g_variant_new_uint32(pairable_timeout_));
+            }
+
+            ListenWindow(const ListenWindow&) = delete;
+            ListenWindow& operator=(const ListenWindow&) = delete;
+
+        private:
+            void set(const char* name, GVariant* value) const {
+                std::string err;
+                if (!set_property(conn_, adapter_, IFACE_ADAPTER, name, value, &err))
+                    debug::log(WARN, "bluetooth: could not set {}: {}", name, err);
+            }
+
+            GDBusConnection* conn_;
+            std::string adapter_;
+            bool was_pairable_ = false;
+            bool was_discoverable_ = false;
+            uint32_t pairable_timeout_ = 0;
+            uint32_t discoverable_timeout_ = 0;
+            bool have_pairable_timeout_ = false;
+            bool have_discoverable_timeout_ = false;
+        };
+
+        int64_t now_seconds() {
+            return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        }
+    } // namespace
+
+    PairResult listen_for_pair(BluezMonitor& monitor,
+                               int seconds,
+                               const ProgressFn& progress,
+                               const ConfirmFn& confirm,
+                               const std::atomic<bool>& cancel,
+                               bool calls_enabled) {
+        PairResult result;
+        result.status = "error";
+
+        GDBusConnection* conn = monitor.connection();
+        const std::string adapter = adapter_path(monitor);
+        if (!conn || adapter.empty()) {
+            result.message = !conn ? _("Bluetooth is unavailable.") : _("No Bluetooth adapter is available.");
+            return result;
+        }
+
+        // The Audio service bit has to be there before the iPhone looks, or it will not offer Messages and Contacts.
+        if (no_root_mode()) {
+            std::string how;
+            if (!ensure_handsfree_record(monitor, how))
+                debug::log(INFO, "bluetooth: no Hands-Free record ({}); the class of device stays as it is", how);
+        }
+
+        AdvertOwnership advert_owned;
+        ListenWindow window(conn, adapter, seconds);
+
+        std::set<std::string> was_paired;
+        std::set<std::string> was_connected;
+        {
+            BluezObjects before;
+            if (live_objects(conn, before)) {
+                for (const auto& d : before.devices) {
+                    if (d.paired)
+                        was_paired.insert(normalize_address(d.address));
+                    if (d.connected)
+                        was_connected.insert(normalize_address(d.address));
+                }
+            }
+        }
+
+        std::atomic<int> answer{0}; // 1 accepted, -1 refused
+        PairingAgent* agent_ptr = nullptr;
+        PairingAgent agent(
+            conn,
+            "",
+            [&](const std::string& code) {
+                notify(progress, "confirm", code);
+                bool accepted = false;
+                if (confirm) {
+                    accepted = confirm(code);
+                } else {
+                    bool unavailable = false;
+                    std::string who = _("An iPhone");
+                    if (agent_ptr) {
+                        BluezObjects now;
+                        if (live_objects(conn, now))
+                            if (const Device* d = now.find_device(agent_ptr->device_path()); d && !d->name.empty())
+                                who = d->name;
+                    }
+                    accepted = confirm_with_dialog(who, code, unavailable) && !unavailable;
+                }
+                answer = accepted ? 1 : -1;
+                notify(progress, accepted ? "confirmed" : "declined", "");
+                return accepted;
+            },
+            calls_enabled);
+        agent_ptr = &agent;
+
+        bool exported = false;
+        monitor.invoke_sync([&] { exported = agent.export_object(); });
+        if (!exported || !agent.register_with_bluez()) {
+            monitor.invoke_sync([&] { agent.unexport_object(); });
+            result.message = _("Could not register a Bluetooth pairing agent.");
+            return result;
+        }
+
+        std::string advert_err;
+        const bool on_air = start_advert(monitor, adapter, advert_err);
+        notify(progress, "listening", on_air ? "" : advert_err);
+
+        const int64_t deadline = now_seconds() + std::max(1, seconds);
+        bool announced = false;
+        bool found = false;
+        Device bonded;
+        std::string name;
+
+        // Past the deadline a confirmed pairing still gets time to finish: BlueZ writes the bond after the answer.
+        int64_t bond_deadline = 0;
+        while (!cancel && answer != -1) {
+            const int64_t now = now_seconds();
+            if (answer == 1 && bond_deadline == 0)
+                bond_deadline = now + LISTEN_BOND_WAIT_SECONDS;
+            if (bond_deadline != 0 ? now >= bond_deadline : now >= deadline)
+                break;
+
+            BluezObjects objects;
+            if (live_objects(conn, objects)) {
+                const std::string target = agent.device_path();
+                if (!announced) {
+                    const Device* candidate = target.empty() ? nullptr : objects.find_device(target);
+                    if (!candidate) {
+                        for (const auto& d : objects.devices) {
+                            if (d.connected && !d.paired && !was_connected.count(normalize_address(d.address)) &&
+                                d.looks_like_iphone()) {
+                                candidate = &d;
+                                break;
+                            }
+                        }
+                    }
+                    if (candidate) {
+                        announced = true;
+                        name = candidate->name.empty() ? normalize_address(candidate->address) : candidate->name;
+                        notify(progress, "connecting", name);
+                    }
+                }
+                for (const auto& d : objects.devices) {
+                    const std::string address = normalize_address(d.address);
+                    const bool new_bond = d.paired && !was_paired.count(address);
+                    const bool rebond = d.paired && !target.empty() && d.path == target && answer == 1;
+                    if (new_bond || rebond) {
+                        bonded = d;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (found)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+
+        auto finish_agent = [&] {
+            agent.unregister_with_bluez();
+            monitor.invoke_sync([&] { agent.unexport_object(); });
+        };
+
+        if (!found) {
+            finish_agent();
+            if (cancel) {
+                result.status = "cancelled";
+                result.message = _("Stopped waiting for the iPhone.");
+            } else if (answer == -1) {
+                result.status = "rejected";
+                result.message = _("Pairing was not confirmed on this computer.");
+            } else if (announced) {
+                result.status = "timeout";
+                result.message =
+                    _("The iPhone connected but pairing did not finish. Keep it unlocked on Settings > Bluetooth and "
+                      "try again.");
+            } else {
+                result.status = "timeout";
+                result.message = _("Nobody connected. On the iPhone, open Settings > Bluetooth and tap this device.");
+            }
+            return result;
+        }
+
+        const std::string display_name = bonded.name.empty() ? normalize_address(bonded.address) : bonded.name;
+        result.device_address = normalize_address(bonded.address);
+        result.device_path = bonded.path;
+        notify(progress, "paired", display_name);
+
+        // An untrusted device is refused every service it asks to connect. Trust is only needed for hands-free,
+        // which iOS opens itself; everything else here is initiated from this side or rides LE.
+        if (calls_enabled) {
+            std::string trust_err;
+            if (!set_property(conn, bonded.path, IFACE_DEVICE, "Trusted", g_variant_new_boolean(TRUE), &trust_err))
+                debug::log(WARN, "bluetooth: could not trust device: {}", trust_err);
+        }
+
+        notify(progress, "settling", "waiting for the iPhone to finish connecting");
+        std::this_thread::sleep_for(std::chrono::seconds(CLASSIC_SETTLE_SECONDS));
+
+        // The LE half shows as the phone offering ANCS on the bond. Services resolve a few seconds after the link.
+        const int64_t ancs_deadline = now_seconds() + LISTEN_ANCS_WAIT_SECONDS;
+        while (!cancel && now_seconds() < ancs_deadline) {
+            BluezObjects objects;
+            if (live_objects(conn, objects)) {
+                if (const Device* d = objects.find_device(bonded.path)) {
+                    bonded = *d;
+                    if (d->ancs_bond() || (d->has_le_bearer && d->le_bonded)) {
+                        result.dual_bond = true;
+                        break;
+                    }
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        finish_agent();
+
+        std::string solicit_err;
+        const bool soliciting = ancs_solicitation_active() || start_advert(monitor, adapter, solicit_err);
+        if (soliciting) {
+            hold_advert_for(ANCS_ADVERT_TIMEOUT_SECONDS);
+            notify(progress,
+                   "soliciting",
+                   "Open Settings > Bluetooth > (i) on the iPhone and enable Show Notifications and Sync Contacts. "
+                   "They can take a few minutes to appear.");
+        } else {
+            notify(progress, "warning", solicit_err + " Notification permissions may not appear.");
+        }
+
+        result.success = true;
+        result.status = "paired";
+        result.message = tr_format(_("Paired with {}."), display_name);
+        if (!result.dual_bond)
+            result.message += " The iPhone has not offered notifications yet. Open Settings > Bluetooth > (i) on the "
+                              "iPhone and turn on Show Notifications; if the switch is missing, forget this device "
+                              "there and pair again.";
         return result;
     }
 

@@ -20,7 +20,8 @@ namespace tether::bluetooth {
 
     struct AgentState;
 
-    // Implements org.bluez.Agent1 for exactly one device.
+    // Implements org.bluez.Agent1 for exactly one device. Built with an empty device path it waits for a phone to
+    // start the pairing and serves the first one that asks.
     //
     // Numeric comparison only: this agent never invents, displays, or accepts a
     // PIN or passkey, and it refuses every request naming a device other than its
@@ -55,6 +56,9 @@ namespace tether::bluetooth {
         // the callback's GLib thread before retrying against the replacement.
         void set_device_path(std::string device_path);
         bool accepts_device_path(const std::string& device_path) const;
+        // The device being served. With an empty path at construction this is the first one that asked, or
+        // empty until one has.
+        std::string device_path() const;
 
         const std::string& path() const;
 
