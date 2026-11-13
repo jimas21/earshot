@@ -282,8 +282,13 @@ TEST(ListenBond, ANewBondOnTheTargetCounts) {
     EXPECT_TRUE(listen_bond_matches(true, false, true, false, false));
 }
 
-TEST(ListenBond, ABondOnAnotherDeviceNeverCounts) {
-    EXPECT_FALSE(listen_bond_matches(true, false, false, false, true));
+// An LE pairing can finish on the phone's identity-address object, not the private-address one that asked.
+TEST(ListenBond, ANewBondElsewhereCountsOnlyAfterTheConfirmation) {
+    EXPECT_TRUE(listen_bond_matches(true, false, false, false, true));
+    EXPECT_FALSE(listen_bond_matches(true, false, false, false, false));
+}
+
+TEST(ListenBond, AnOldBondOnAnotherDeviceNeverCounts) {
     EXPECT_FALSE(listen_bond_matches(true, true, false, true, true));
 }
 

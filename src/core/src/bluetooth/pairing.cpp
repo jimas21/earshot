@@ -973,11 +973,16 @@ namespace tether::bluetooth {
                              bool is_target,
                              bool target_unpaired_seen,
                              bool confirmed) {
-        if (!paired || !is_target)
+        if (!paired)
             return false;
-        // A fresh bond on the target. A bond that predates the listen only counts once the target has been seen
-        // unpaired and the user has confirmed: until then it is the stale bond, not the one being made.
-        return !was_paired_before || (confirmed && target_unpaired_seen);
+        // A fresh bond. On the target at any time; elsewhere only after the user confirmed, because an iPhone
+        // pairing over LE resolves its private address on bonding and BlueZ can then report the bond on a
+        // different device object than the one that asked for the code.
+        if (!was_paired_before)
+            return is_target || confirmed;
+        // A bond that predates the listen only counts on the target once it has been seen unpaired and the user
+        // has confirmed: until then it is the stale bond, not the one being made.
+        return is_target && confirmed && target_unpaired_seen;
     }
 
     PairResult listen_for_pair(BluezMonitor& monitor,
@@ -1143,6 +1148,13 @@ namespace tether::bluetooth {
 
         if (!found) {
             finish_agent();
+            debug::log(INFO,
+                       "bluetooth: listen ended without a bond (cancel={}, answer={}, announced={}, "
+                       "target_unpaired_seen={})",
+                       cancel.load(),
+                       answer.load(),
+                       announced,
+                       target_unpaired_seen);
             if (cancel) {
                 result.status = "cancelled";
                 result.message = _("Stopped waiting for the iPhone.");
@@ -1164,6 +1176,7 @@ namespace tether::bluetooth {
         const std::string display_name = bonded.name.empty() ? normalize_address(bonded.address) : bonded.name;
         result.device_address = normalize_address(bonded.address);
         result.device_path = bonded.path;
+        debug::log(INFO, "bluetooth: listen bonded {}", display_name);
         notify(progress, "paired", display_name);
 
         // An untrusted device is refused every service it asks to connect. Trust is only needed for hands-free,
