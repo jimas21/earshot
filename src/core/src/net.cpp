@@ -697,6 +697,22 @@ namespace tether {
         }).detach();
     }
 
+    // Set while a listen runs; seconds:0 from a client sets the cancel flag.
+    static std::atomic<bool> g_bt_listen_cancel{false};
+    static std::atomic<bool> g_bt_listening{false};
+    static std::mutex g_bt_listen_mutex;
+    static std::string g_bt_listen_operation_id;
+    // When the running listen ends, as steady-clock milliseconds; 0 when none runs.
+    static std::atomic<int64_t> g_bt_listen_deadline_ms{0};
+
+    static int64_t steady_now_ms() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
+    // A prompt that shows up right at the end of a listen still gets this long to be answered.
+    constexpr int BT_CONFIRM_MIN_SECONDS = 15;
+
     // Runs on the BlueZ monitor's GLib thread, same as the local dialog it replaces.
     static bool ask_client_to_confirm(const std::string& code, const std::string& operation_id) {
         {
@@ -711,9 +727,19 @@ namespace tether {
         set_operation_id(event, operation_id);
         broadcast_local_event(event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
 
+        // This thread is also the one that has to unregister the agent when a listen ends, so the wait must
+        // not outlast the listen: cancelling it, or reaching its deadline, counts as a refusal.
+        auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(BT_CONFIRM_TIMEOUT_SECONDS);
+        const int64_t listen_deadline_ms = g_bt_listen_deadline_ms.load();
+        if (listen_deadline_ms != 0) {
+            const auto listen_end = std::chrono::steady_clock::time_point(std::chrono::milliseconds(listen_deadline_ms));
+            const auto floor = std::chrono::steady_clock::now() + std::chrono::seconds(BT_CONFIRM_MIN_SECONDS);
+            limit = std::min(limit, std::max(listen_end, floor));
+        }
         std::unique_lock<std::mutex> lock(g_bt_confirm_mutex);
-        g_bt_confirm_cv.wait_for(
-            lock, std::chrono::seconds(BT_CONFIRM_TIMEOUT_SECONDS), [] { return g_bt_confirm_answer >= 0; });
+        g_bt_confirm_cv.wait_until(lock, limit, [] {
+            return g_bt_confirm_answer >= 0 || (g_bt_listening && g_bt_listen_cancel);
+        });
         const bool accepted = g_bt_confirm_answer == 1;
         g_bt_confirm_operation_id.clear();
         return accepted;
@@ -788,12 +814,6 @@ namespace tether {
         broadcast_local_event(build_bt_status().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
-    // Set while a listen runs; seconds:0 from a client sets the cancel flag.
-    static std::atomic<bool> g_bt_listen_cancel{false};
-    static std::atomic<bool> g_bt_listening{false};
-    static std::mutex g_bt_listen_mutex;
-    static std::string g_bt_listen_operation_id;
-
     static void run_bt_listen(const std::string& operation_id, int seconds) {
         auto send_result = [&](bool success, const std::string& status, const std::string& message) {
             nlohmann::json event;
@@ -822,6 +842,7 @@ namespace tether {
         }
         g_bt_listen_cancel = false;
         g_bt_listening = true;
+        g_bt_listen_deadline_ms = steady_now_ms() + static_cast<int64_t>(std::max(1, seconds)) * 1000;
 
         auto config = bluetooth::load_config();
         auto result = bluetooth::listen_for_pair(
@@ -843,6 +864,7 @@ namespace tether {
         remember_paired_device(config, result);
 
         g_bt_listening = false;
+        g_bt_listen_deadline_ms = 0;
         {
             std::lock_guard<std::mutex> lock(g_bt_listen_mutex);
             g_bt_listen_operation_id.clear();
@@ -857,8 +879,17 @@ namespace tether {
     // seconds <= 0 stops the listen that is running, if it is the caller's (or the caller names none).
     static void stop_bt_listen(const std::string& operation_id) {
         std::lock_guard<std::mutex> lock(g_bt_listen_mutex);
-        if (g_bt_listening && (operation_id.empty() || operation_id == g_bt_listen_operation_id))
+        if (g_bt_listening && (operation_id.empty() || operation_id == g_bt_listen_operation_id)) {
             g_bt_listen_cancel = true;
+            // A confirmation prompt may be waiting on the monitor's thread; refuse it so that thread is freed
+            // now rather than after the prompt's own timeout.
+            {
+                std::lock_guard<std::mutex> confirm_lock(g_bt_confirm_mutex);
+                if (g_bt_confirm_answer < 0)
+                    g_bt_confirm_answer = 0;
+            }
+            g_bt_confirm_cv.notify_all();
+        }
     }
 
     static void restart_supervision(bluetooth::Config config) {
