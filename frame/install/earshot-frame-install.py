@@ -529,7 +529,7 @@ def install(args, status):
             lock.close()
     print()
     print("Earshot is installed and running.")
-    print("Pair your iPhone in Steam Settings > Bluetooth, then open the Phone tab in the quick menu.")
+    print("Next: open the Phone tab in the quick menu and tap Pair iPhone. Do not pair in Steam's Bluetooth settings.")
     if not args.if_newer:
         offer_system_setup()
 
