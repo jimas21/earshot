@@ -320,14 +320,31 @@ namespace tether {
         for (int fd : targets) {
             if (fd == exclude_fd)
                 continue;
+            {
+                // The copy above is stale by now: a client that disconnected meanwhile may have had its
+                // number handed to something else, which must not receive a stranger's events.
+                std::lock_guard<std::mutex> lock(g_subscribers_mutex);
+                if (!local_subscribers.count(fd))
+                    continue;
+            }
             if (!robust_plain_write(fd, packet.c_str(), packet.size()))
                 dropped.push_back(fd);
         }
         // A subscriber that cannot keep up has a stream that is already damaged or about to be: drop it
-        // so it resubscribes cleanly rather than slowing everyone else down.
+        // so it resubscribes cleanly rather than slowing everyone else down. Unregistering alone leaves
+        // the client connected and deaf, so the socket is shut down too: the event loop's read path then
+        // sees EOF and closes it, and the client reconnects.
         for (int fd : dropped) {
-            debug::log(WARN, "net: dropping local subscriber fd {}: it is not reading", fd);
-            unregister_local_subscriber(fd);
+            bool was_subscribed = false;
+            {
+                std::lock_guard<std::mutex> lock(g_subscribers_mutex);
+                was_subscribed = local_subscribers.erase(fd) > 0;
+                // Under the lock, and only for a still-registered fd, so a reused number is never shut down.
+                if (was_subscribed)
+                    shutdown(fd, SHUT_RDWR);
+            }
+            if (was_subscribed)
+                debug::log(WARN, "net: dropped local subscriber fd {}: it is not reading", fd);
         }
     }
 

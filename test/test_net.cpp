@@ -541,6 +541,37 @@ namespace {
         tether::set_tcp_enabled(true);
     }
 
+    // A subscriber that stops reading must not just be forgotten: its socket has to be shut down so the client
+    // sees EOF and reconnects, rather than sitting connected and deaf.
+    TEST(LocalBroadcastTest, StalledSubscriberIsDroppedAndSeesEof) {
+        int pair[2];
+        ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, pair), 0);
+        const int flags = fcntl(pair[1], F_GETFL, 0);
+        ASSERT_EQ(fcntl(pair[1], F_SETFL, flags | O_NONBLOCK), 0);
+        int small = 4096;
+        setsockopt(pair[1], SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+        timeval read_timeout{20, 0};
+        setsockopt(pair[0], SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(read_timeout));
+
+        tether::register_local_subscriber(pair[1]);
+        // Far more than the socket buffers hold, and nobody reads until the broadcast gives up.
+        const std::string big(4 * 1024 * 1024, 'x');
+        tether::broadcast_local_event(big);
+
+        // Data that was already queued comes first; the drop must end the stream.
+        char buf[65536];
+        ssize_t n = 1;
+        size_t total = 0;
+        while ((n = read(pair[0], buf, sizeof(buf))) > 0)
+            total += static_cast<size_t>(n);
+        EXPECT_EQ(n, 0) << "the dropped subscriber's peer never saw EOF (errno " << errno << ")";
+        EXPECT_LT(total, big.size());
+
+        tether::unregister_local_subscriber(pair[1]);
+        close(pair[0]);
+        close(pair[1]);
+    }
+
     TEST(UnixServerTest, FileSendCompletionEchoesOptionalOperationId) {
         const std::string runtime_dir = unique_test_dir("tether_unix_file_send_test");
         CleanupGuard cleanup_guard(runtime_dir);
