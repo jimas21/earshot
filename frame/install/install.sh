@@ -40,7 +40,7 @@ systemctl --user restart --no-block earshot-tetherd.service earshot-steamui.serv
 # The engine waits up to 30 s for Bluetooth before it starts; wait for it. Right after a
 # --no-block restart it can still read "inactive", so only "active" or "failed" end the wait.
 state=unknown
-for i in $(seq 1 45); do
+for _ in $(seq 1 45); do
     state="$(systemctl --user is-active earshot-tetherd.service 2>/dev/null || true)"
     case "$state" in active|failed) break ;; esac
     sleep 1
