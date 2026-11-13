@@ -17,7 +17,7 @@ Frame side:
 
 No Mac and no app on the phone are needed for messages, notifications or calls.
 
-Status: planning. See [PLAN.md](PLAN.md) and [TESTS.md](TESTS.md).
+Status: building v1. See [PLAN.md](PLAN.md), [SPEC-v1.md](SPEC-v1.md) and [TESTS.md](TESTS.md).
 
 ## Branches
 

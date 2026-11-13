@@ -32,7 +32,8 @@ iPhone ── BLE (ANCS) ──────────┐
 - **UI layer:** injected into Steam's own client UI through CEF remote debugging,
   the route Tragus already uses on the Frame (a Quick Access tab plus a top-bar
   indicator). Pop-ups use Steam's own toast component if it can show over a running
-  game. If it cannot, the fallback is a small SteamVR overlay drawn only while a
+  game. First choice: SteamVR's own notifications (`vrcmd --notify`), which the Tragus
+  earbuds companion already uses on the Frame. Fallback: a small SteamVR overlay drawn only while a
   notification is showing, styled like Steam's toasts.
 
 ## Scope
