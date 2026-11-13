@@ -171,3 +171,14 @@ TEST(SecretStore, RetentionNamesRoundTrip) {
     EXPECT_EQ(retention_from_string(""), Retention::Encrypted);
     EXPECT_EQ(retention_from_string("nonsense"), Retention::Encrypted);
 }
+
+// Without root the keyring may not exist, so a value nobody can read maps to keeping nothing.
+TEST(SecretStore, UnknownRetentionKeepsNothingWithoutRoot) {
+    tether::testing::ScopedEnv root("TETHER_NO_ROOT", std::string("1"));
+    EXPECT_EQ(retention_from_string("nonsense"), Retention::None);
+    EXPECT_EQ(retention_from_string("Plaintext "), Retention::None);
+    // Absent and valid values are unaffected.
+    EXPECT_EQ(retention_from_string(""), Retention::Encrypted);
+    EXPECT_EQ(retention_from_string("encrypted"), Retention::Encrypted);
+    EXPECT_EQ(retention_from_string("plaintext"), Retention::Plaintext);
+}

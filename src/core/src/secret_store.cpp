@@ -35,7 +35,14 @@ namespace tether {
             return Retention::Plaintext;
         if (value == "none")
             return Retention::None;
-        return Retention::Encrypted;
+        if (value == "encrypted" || value.empty())
+            return Retention::Encrypted;
+        // A misspelt setting must not quietly pick a mode. Without root the encrypted store may have no keyring
+        // to rely on, so there the safe reading is to keep nothing; elsewhere the upstream default stands.
+        const char* no_root = std::getenv("TETHER_NO_ROOT");
+        const bool user_level = no_root && *no_root && std::string(no_root) != "0";
+        debug::log(WARN, "retention: unknown value '{}'; using {}", value, user_level ? "none" : "encrypted");
+        return user_level ? Retention::None : Retention::Encrypted;
     }
 
     namespace secret {
