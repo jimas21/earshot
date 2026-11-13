@@ -32,6 +32,16 @@ helper as the user unit `earshot-steamui.service`.
 - **Replies.** The Messages tab lists one-to-one conversations. Its text box is a plain
   text input, so Steam's own keyboard handles typing. Each message shows sending, sent or
   the reason it failed.
+- **Pairing.** The Phone tab pairs the iPhone itself, with no terminal and no root. The
+  helper makes the headset visible for two minutes (`bt_pair_listen`), the user taps it
+  under Other Devices on the iPhone, both show a 6-digit code, and the user confirms it in
+  the tab (never automatically). A phone-initiated bond is what carries notifications. If
+  the engine does not know `bt_pair_listen`, the tab falls back to Search, pick, pair
+  (`bt_scan`, `bt_pair`); "Pair a different way" does the same on request. Failures are
+  explained in plain words with one button, and an "Almost done" list ticks off the iPhone's
+  switches as the engine reports them. The state lives in the helper, so it survives
+  closing the tab or Steam reloading its pages. Settings has Pair a different iPhone and
+  Forget this iPhone.
 - **Priority.** Settings has Auto, Always Frame and Always phone. When the phone has
   priority the helper stops raising alerts and asks BlueZ to let go of the Hands-Free link
   (`Device1.DisconnectProfile` through `busctl`), so the phone rings normally; it asks for

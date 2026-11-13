@@ -72,6 +72,10 @@ element-finding and styling approach):
   input, not a custom keyboard). Send shows sending / sent / failed.
 - **Settings:** priority mode, per-app mute, notification preview on/off, setup status
   (from `tether --bt-setup` / `--bt-status`), updates.
+- **Pair iPhone** (first thing shown with no phone paired, and in Settings): make the headset
+  visible and wait for the iPhone, show the code with Confirm / Cancel, explain each failure in
+  plain words with one fix button, then an "Almost done" checklist of the iPhone's switches.
+  Scan-and-pick is the fallback. All state is in the helper. No terminal, no root.
 - **Not set up yet:** if the engine or system setup is missing, the tab shows what is
   missing and how to fix it instead of empty lists.
 

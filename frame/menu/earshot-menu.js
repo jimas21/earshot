@@ -145,6 +145,26 @@
   .es-compose { display:flex; gap:6px; padding:6px 10px; }
   .es-compose input { flex:1; min-width:0; height:36px; box-sizing:border-box; border:1px solid #3d4450; border-radius:3px; background:#10161d; color:#fff; font:inherit; padding:0 10px; }
   #earshot-bar-indicator .es-cnt { margin-left:3px; }
+  .es-pair { padding:6px 14px 14px; }
+  .es-ph { font-size:20px; font-weight:700; color:#fff; margin:10px 0 8px; }
+  .es-pstep { font-size:16px; line-height:1.4; color:#dcdedf; margin:6px 0 10px; }
+  .es-pstep b { color:#fff; }
+  .es-ptext { font-size:14px; line-height:1.4; color:#b8bcbf; margin:6px 0 10px; }
+  .es-pbtn { display:block; width:100%; box-sizing:border-box; min-height:56px; margin:8px 0; padding:12px 16px; border:0; border-radius:6px; background:#3d4450; color:#fff; font:inherit; font-size:18px; font-weight:700; text-align:center; cursor:pointer; }
+  .es-pbtn.es-blue { background:#1a9fff; } .es-pbtn.es-go { background:#3c9d2f; } .es-pbtn.es-stop { background:#c0392b; }
+  .es-pbtn.es-quiet { background:#23262e; color:#b8bcbf; font-weight:400; font-size:15px; min-height:48px; }
+  .es-pbtn:disabled { opacity:.45; cursor:default; }
+  .es-pdev { display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%; box-sizing:border-box; min-height:60px; margin:6px 0; padding:10px 16px; border:0; border-radius:6px; background:#23262e; color:#fff; font:inherit; font-size:18px; text-align:left; cursor:pointer; }
+  .es-pdev .es-tag { font-size:12px; color:#8b929a; white-space:nowrap; }
+  .es-pdev.es-phone { background:#1b3a55; }
+  .es-code { font-size:64px; font-weight:700; letter-spacing:.12em; text-align:center; color:#fff; margin:14px 0 12px; font-variant-numeric:tabular-nums; }
+  .es-pwait { font-size:18px; color:#9fd58f; margin:12px 0; }
+  .es-count { font-size:28px; font-weight:700; color:#fff; text-align:center; margin:10px 0 4px; font-variant-numeric:tabular-nums; }
+  .es-chk { display:flex; gap:12px; align-items:flex-start; padding:10px 0; border-bottom:1px solid #23262e; }
+  .es-chk .es-mark { flex:none; width:28px; height:28px; border-radius:50%; background:#3d4450; color:#fff; text-align:center; line-height:28px; font-size:16px; }
+  .es-chk.es-on .es-mark { background:#3c9d2f; } .es-chk.es-off .es-mark { background:#c0392b; }
+  .es-chk .es-lab { font-size:16px; font-weight:700; color:#fff; }
+  .es-chk .es-note { font-size:13px; }
   `;
   function ensureStyle() {
     const old = document.getElementById(STYLE_ID);
@@ -209,7 +229,9 @@
   function setupHtml(setup) {
     return `<div class="es-setup"><b>${esc(setup.title)}</b><div class="es-note" style="margin-top:4px">${esc(setup.text)}</div>` +
       (setup.steps || []).map((s) => `<div class="es-step">${esc(s.what)}${s.command ? `<code>${esc(s.command)}</code>` : ''}</div>`).join('') +
-      `<div class="es-btns" style="margin-top:10px"><button class="es-btn es-blue" data-act="retry">Check again</button></div></div>`;
+      (setup.action && /^[a-z-]+$/.test(setup.action.act)
+        ? `<button class="es-pbtn es-blue" data-act="${esc(setup.action.act)}">${esc(setup.action.label)}</button>`
+        : `<div class="es-btns" style="margin-top:10px"><button class="es-btn es-blue" data-act="retry">Check again</button></div>`) + `</div>`;
   }
 
   function pageCalls() {
@@ -325,7 +347,10 @@
     h += '<div class="es-h">Phone</div><div class="es-note" style="font-size:12px;line-height:1.7">' +
       `Messages: ${p.messages ? 'connected' : 'not connected'}<br>Notifications: ${p.notifications ? 'connected' : (p.ancs_reason ? esc(p.ancs_reason) : 'not connected')}<br>Calls: ${p.calls ? 'connected' : p.calls_restore === 'pending' ? 'reconnecting...' : 'not connected'}` +
       (p.calls_restore === 'unverified' ? '<br>The call link did not come back after the headset took it back. Turn Bluetooth off and on again on the iPhone.' : '') +
-      (p.profile_reason ? `<br>${esc(p.profile_reason)}` : '') + '</div>';
+      (p.profile_reason ? `<br>${esc(p.profile_reason)}` : '') + '</div>' +
+      '<div class="es-row es-col"><div class="es-choice">' +
+      `<button data-act="pair-start">${p.paired ? 'Pair a different iPhone' : 'Pair iPhone'}</button>` +
+      (p.paired ? '<button data-act="forget-ask">Forget this iPhone</button>' : '') + '</div></div>';
     const u = updateText(S.update);
     const versions = (S.update && S.update.versions) || {};
     h += '<div class="es-h">Updates</div>' + toggle('Update automatically', st.auto_update !== false, 'auto_update', 'Checks for a new Earshot every few hours and installs it.') +
@@ -334,6 +359,112 @@
       (Object.keys(versions).length ? `<div class="es-note" style="margin-top:8px">Installed: ${Object.keys(versions).map((k) => esc(k) + ' ' + esc(versions[k])).join(', ')}</div>` : '');
     return h + '</div>';
   }
+
+  // ---------- pairing: every screen is drawn from S.pair, which lives in the helper ----------
+  const pbtn = (act, label, cls, extra) => `<button class="es-pbtn${cls ? ' ' + cls : ''}" data-act="${act}"${extra || ''}>${esc(label)}</button>`;
+  const phead = (t) => `<div class="es-ph">${esc(t)}</div>`;
+  const clock = (n) => Math.floor(n / 60) + ':' + String(n % 60).padStart(2, '0');
+  const spaced = (code) => String(code || '').replace(/^(\d{3})(\d{3})$/, '$1 $2');
+  function leftSeconds(p) { return Math.max(0, Math.round((p.ends_at || 0) - Date.now() / 1000)); }
+
+  function pairHtml(p) {
+    let h = '';
+    switch (p.phase) {
+      case 'blocked':
+        h = phead('Earshot cannot pair yet') +
+          (p.reasons || []).map((r) => `<div class="es-pstep">${esc(r)}</div>`).join('') +
+          pbtn('pair-start', 'Check again', 'es-blue') + pbtn('pair-close', 'Close', 'es-quiet');
+        break;
+      case 'listen': {
+        const left = leftSeconds(p), over = p.expired || left <= 0;
+        h = phead('Pair your iPhone') +
+          `<div class="es-pstep">On your iPhone, open <b>Settings &gt; Bluetooth</b> and tap <b>${esc(p.headset || 'this headset')}</b> under <b>Other Devices</b>.</div>` +
+          `<div class="es-ptext" id="earshot-vis-note">${over ? 'The headset is not visible any more.' : 'The headset is visible for:'}</div>` +
+          `<div class="es-count" id="earshot-count">${over ? '0:00' : clock(left)}</div>` +
+          pbtn('pair-listen-again', 'Make visible again', 'es-blue', (over ? '' : ' disabled') + ' id="earshot-visible-again"') +
+          pbtn('pair-other', 'Pair a different way', 'es-quiet') + pbtn('pair-close', 'Cancel', 'es-quiet');
+        break;
+      }
+      case 'search': {
+        h = phead('Pair your iPhone') +
+          (p.fallback ? '<div class="es-ptext">This Earshot cannot wait for the iPhone, so it will search for it instead.</div>' : '') +
+          '<div class="es-pstep">On your iPhone, open <b>Settings &gt; Bluetooth</b> and keep that screen open.</div>';
+        if (!p.searched) h += pbtn('pair-search', 'Search', 'es-blue');
+        else {
+          if (p.searching) h += '<div class="es-pwait">Searching…</div>';
+          h += (p.devices || []).map((d) => `<button class="es-pdev${d.iphone ? ' es-phone' : ''}" data-act="pair-pick" data-a="${esc(d.address)}"><span>${esc(d.name)}</span>` +
+            `<span class="es-tag">${d.redo ? 'Paired before. Pair again' : d.iphone ? 'iPhone' : 'Other device'}</span></button>`).join('');
+          if (!p.searching) {
+            if (!(p.devices || []).length && p.message) h += `<div class="es-ptext">${esc(p.message)}</div>`;
+            h += pbtn('pair-search', 'Search again', (p.devices || []).length ? '' : 'es-blue');
+          }
+        }
+        if (p.can_listen) h += pbtn('pair-listen', 'Wait for the iPhone instead', 'es-quiet');
+        h += pbtn('pair-close', 'Cancel', 'es-quiet');
+        break;
+      }
+      case 'pairing':
+        h = phead(p.name ? 'Pairing with ' + p.name : 'Pairing') +
+          `<div class="es-pwait">${esc(p.progress || 'Working…')}</div>` +
+          '<div class="es-ptext">Keep the iPhone unlocked and on this screen.</div>' +
+          (p.can_close ? pbtn('pair-close', 'Close', 'es-quiet') : '');
+        break;
+      case 'confirm':
+        h = phead('Check the code') + `<div class="es-code">${esc(spaced(p.code))}</div>` +
+          '<div class="es-pstep">Check the iPhone shows the same code, then tap <b>Pair</b> on the iPhone and <b>Confirm</b> here.</div>' +
+          pbtn('pair-confirm', 'Confirm', 'es-go', ` data-a="${esc(p.op)}"`) + pbtn('pair-close', 'Cancel', 'es-stop');
+        break;
+      case 'failed':
+        h = phead(p.title) + `<div class="es-ptext" style="font-size:16px">${esc(p.text)}</div>` +
+          pbtn('pair-retry', p.button || 'Try again', 'es-blue') + pbtn('pair-close', 'Close', 'es-quiet');
+        break;
+      case 'weak':
+        h = phead('Paired, but notifications will not work') +
+          '<div class="es-ptext" style="font-size:16px">Your iPhone and this headset are paired, but without the part notifications need. Texts and contacts can still work. ' +
+          'To get notifications, tap <b>Forget This Device</b> for this headset on your iPhone (Settings &gt; Bluetooth), then tap Try again.</div>' +
+          pbtn('pair-retry', 'Try again', 'es-blue') + pbtn('pair-keep', 'Keep it without notifications', 'es-quiet');
+        break;
+      case 'almost': {
+        h = phead('Almost done') +
+          `<div class="es-pstep">On your iPhone, open <b>Settings &gt; Bluetooth</b>, tap the <b>(i)</b> next to <b>${esc(p.headset || 'this headset')}</b> and turn these on. They can take a minute to appear: close and reopen that screen.</div>` +
+          (p.connected ? '' : `<div class="es-ptext">Waiting for the iPhone to connect…${p.reason ? ' ' + esc(p.reason) : ''}</div>`) +
+          (p.items || []).map((i) => `<div class="es-chk es-${i.state === 'on' ? 'on' : i.state === 'off' ? 'off' : 'wait'}" data-item="${esc(i.id)}"><span class="es-mark">${i.state === 'on' ? '&#10003;' : i.state === 'off' ? '!' : '&middot;'}</span>` +
+            `<div><div class="es-lab">${esc(i.label)}</div><div class="es-note">${esc(i.note)}</div></div></div>`).join('') +
+          (p.ready ? pbtn('pair-done', 'Done', 'es-go') : pbtn('pair-done', 'I will finish later', 'es-quiet'));
+        break;
+      }
+      case 'forget':
+        h = phead('Forget this iPhone?') + '<div class="es-ptext" style="font-size:16px">Earshot will stop using it. You can pair it again later.</div>' +
+          pbtn('forget-do', 'Forget this iPhone', 'es-stop') + pbtn('pair-close', 'Keep it', 'es-quiet');
+        break;
+      case 'forgetting':
+        h = phead('Forgetting…') + '<div class="es-pwait">One moment.</div>';
+        break;
+      case 'forgotten':
+        h = phead('Now finish on the iPhone') +
+          `<div class="es-pstep">On your iPhone, open <b>Settings &gt; Bluetooth</b>, tap the <b>(i)</b> next to <b>${esc(p.headset || 'this headset')}</b> and tap <b>Forget This Device</b>.</div>` +
+          pbtn('pair-start', 'Pair iPhone', 'es-blue') + pbtn('pair-done', 'Done', 'es-quiet');
+        break;
+      default:
+        h = phead('Pairing') + pbtn('pair-close', 'Close', 'es-quiet');
+    }
+    return `<div class="es-pair" data-phase="${esc(p.phase)}">${h}</div>`;
+  }
+
+  // The countdown is the only thing that moves without a state push.
+  let pairTick = null;
+  function tickPair() {
+    const el = document.getElementById('earshot-count');
+    if (!el || !S || !S.pair || S.pair.phase !== 'listen') return;
+    const left = leftSeconds(S.pair);
+    el.textContent = clock(left);
+    const over = S.pair.expired || left <= 0;
+    const b = document.getElementById('earshot-visible-again'); if (b) b.disabled = !over;
+    const note = document.getElementById('earshot-vis-note');
+    if (note) note.textContent = over ? 'The headset is not visible any more.' : 'The headset is visible for:';
+  }
+  pairTick = setInterval(tickPair, 1000);
+  cleanups.push(() => clearInterval(pairTick));
 
   // ---------- popup: Phone tab ----------
   const TAB_ID = 'earshot-qam-tab';
@@ -511,6 +642,19 @@
       case 'setting-toggle': act({ type: 'set_setting', key: a, value: b === '1' }); break;
       case 'mute': act({ type: 'mute', app_id: a, muted: b === '1' }); break;
       case 'check-updates': act({ type: 'check_updates' }); break;
+      case 'pair-start': act({ type: 'pair_start' }); break;
+      case 'pair-search': act({ type: 'pair_search' }); break;
+      case 'pair-pick': act({ type: 'pair_pick', address: a }); break;
+      case 'pair-confirm': act({ type: 'pair_confirm', op: a, accept: true }); break;
+      case 'pair-retry': act({ type: 'pair_retry' }); break;
+      case 'pair-keep': act({ type: 'pair_keep' }); break;
+      case 'pair-close': act({ type: 'pair_close' }); break;
+      case 'pair-done': act({ type: 'pair_done' }); break;
+      case 'pair-listen-again': act({ type: 'pair_listen_again' }); break;
+      case 'pair-listen': act({ type: 'pair_listen' }); break;
+      case 'pair-other': act({ type: 'pair_other' }); break;
+      case 'forget-ask': act({ type: 'forget_ask' }); break;
+      case 'forget-do': act({ type: 'forget_do' }); break;
     }
   }
 
@@ -528,8 +672,13 @@
     if (interacting && !force) { renderQueued = true; return; }
     setHtml('earshot-head', headHtml());
     setHtml('earshot-call', callCardHtml());
-    setHtml('earshot-tabs', tabsHtml());
     const body = document.getElementById('earshot-body');
+    if (S && S.pair) {  // a pairing is in progress (or finishing): it takes over the tab, wherever it was opened from
+      setHtml('earshot-tabs', '');
+      setHtml('earshot-body', pairHtml(S.pair));
+      return;
+    }
+    setHtml('earshot-tabs', tabsHtml());
     if (!S) { setHtml('earshot-body', '<div class="es-msg">Waiting for the Earshot helper…</div>'); return; }
     if (S.setup && ui.tab !== 'settings') { setHtml('earshot-body', setupHtml(S.setup)); return; }
     if (ui.tab === 'settings') { setHtml('earshot-body', pageSettings()); return; }

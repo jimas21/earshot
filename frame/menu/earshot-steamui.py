@@ -891,6 +891,618 @@ class FileDetector(PresenceDetector):
 
 
 # ---------------------------------------------------------------------------
+# Pairing: the whole "Pair iPhone" flow lives here, in the helper, so it survives the
+# menu closing or Steam reloading its pages. The page only draws what view() returns and
+# sends small actions back; every action is checked here.
+#
+# Primary route (no root, stock BlueZ): the headset becomes visible and waits, and the
+# user taps it on the iPhone (bt_pair_listen). A phone-initiated bond is what carries the
+# LE half that notifications need. Secondary route: scan and pick (bt_scan + bt_pair).
+#
+# Command contract assumed of the daemon for the primary route:
+#   -> {"command":"bt_pair_listen","operation_id":ID,"seconds":120}
+#      seconds 0 means "stop being visible" (optional; a daemon may ignore it)
+#   <- bt_pair_progress / bt_pair_confirm_request / bt_pair_result, all carrying ID
+# ---------------------------------------------------------------------------
+
+MAC = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
+
+PAIR_WORDS = {
+    "discovering": "Looking for your iPhone…",
+    "rediscovering": "Looking for your iPhone again…",
+    "already_paired": "Already paired. Checking the connection…",
+    "connecting": "Connecting to {name}…",
+    "pairing": "Asking {name} to pair…",
+    "confirm": "Waiting for you to check the code…",
+    "confirmed": "Code confirmed. Waiting for the iPhone…",
+    "declined": "The code was not confirmed.",
+    "unanswered": "The code was not confirmed.",
+    "retrying": "The iPhone did not answer. Trying once more…",
+    "error": "That try did not work. Checking what is next…",
+    "paired": "Paired. Setting things up…",
+    "settling": "Setting things up…",
+    "soliciting": "Almost there. Asking the iPhone to show its switches…",
+}
+
+FAILURES = {
+    "stale": ("The iPhone remembers an old pairing",
+              "On your iPhone, open the entry for this headset under My Devices and tap Forget This Device. "
+              "If you see it twice, forget both. Then tap Try again. Earshot has already cleared its own side.",
+              "Try again"),
+    "declined_here": ("The code was not confirmed",
+                      "Tap Try again. When the code appears, check it matches the iPhone, tap Pair on the iPhone, "
+                      "then tap Confirm here.", "Try again"),
+    "declined_phone": ("The iPhone said no",
+                       "Tap Try again, then tap Pair on the iPhone when it asks.", "Try again"),
+    "timeout": ("The iPhone did not finish pairing in time",
+                "Keep the iPhone unlocked on Settings > Bluetooth, then tap Try again.", "Try again"),
+    "not_found": ("Earshot cannot see your iPhone",
+                  "Unlock it and keep Settings > Bluetooth open, then search again.", "Search again"),
+    "busy": ("Another pairing is still finishing", "Wait a moment, then tap Try again.", "Try again"),
+    "agent": ("Bluetooth is busy with another program",
+              "Turn Bluetooth off and on in the headset settings, then tap Try again.", "Try again"),
+    "unavailable": ("Bluetooth is not available",
+                    "Check that Bluetooth is on in the headset settings, then tap Try again.", "Try again"),
+    "engine_lost": ("Earshot lost its link to Bluetooth", "Wait a few seconds, then tap Try again.", "Try again"),
+    "stalled": ("No answer from Bluetooth", "Tap Try again.", "Try again"),
+    "other": ("Pairing did not work this time",
+              "Tap Try again. If it keeps failing, restart the headset.", "Try again"),
+}
+
+
+def classify_pair_failure(status, message):
+    """Map the engine's status and message onto one of FAILURES. The raw text is never shown."""
+    text = str(message or "").lower()
+    status = str(status or "")
+    if status == "busy":
+        return "busy"
+    if status == "not_found":
+        return "not_found"
+    if ("key-missing" in text or "key missing" in text or "authenticationfailed" in text
+            or "refused the connection before pairing started" in text):
+        return "stale"
+    if status == "rejected":
+        return "declined_here" if "not confirmed on this computer" in text else "declined_phone"
+    if "authenticationrejected" in text or "authenticationcanceled" in text:
+        return "declined_phone"
+    if status == "timeout":
+        return "timeout"
+    if "register a bluetooth pairing agent" in text:
+        return "agent"
+    if "unavailable" in text:
+        return "unavailable"
+    return "other"
+
+
+class Pairing:
+    LISTEN_SECONDS = 120
+    SCAN_TRIES = 3            # automatic searches before asking the user to search again
+    SCAN_STALL = 45.0         # no scan result for this long: stop saying "Searching"
+    LISTEN_DETECT = 8.0       # a daemon that knows bt_pair_listen reacts within this long
+    BUSY_TRIES = 6
+    BUSY_DELAY = 5.0
+    STALL = 240.0             # a pairing with no event this long is given up on
+    GIVE_UP_AFTER = 90.0      # "Close" appears on a pairing screen after this long
+    UNPAIR_WAIT = 15.0
+    MAX_DEVICES = 12
+
+    def __init__(self, helper):
+        self.h = helper
+        self.s = None
+        self.listen_ok = None     # None unknown, True the daemon has bt_pair_listen, False it has not
+        self.counter = itertools.count(1)
+        self.timers = {}
+
+    # ----- plumbing -----
+
+    def clock(self):
+        return self.h.loop.clock()
+
+    def new_op(self, kind):
+        return "earshot-%s-%d-%s" % (kind, next(self.counter), os.urandom(3).hex())
+
+    def timer(self, name, delay, fn):
+        self.cancel_timer(name)
+        self.timers[name] = self.h.loop.call_later(delay, lambda: self.fire(name, fn))
+
+    def cancel_timer(self, name):
+        self.h.loop.cancel(self.timers.pop(name, None))
+
+    def fire(self, name, fn):
+        self.timers.pop(name, None)
+        fn()
+        self.h.dirty()
+
+    def clear(self):
+        for name in list(self.timers):
+            self.cancel_timer(name)
+        self.s = None
+
+    def engine_reset(self, up):
+        """The engine connection came or went. A new connection forgets what it supported."""
+        self.listen_ok = None
+        if up:
+            return
+        s = self.s
+        if s and s["phase"] in ("pairing", "confirm", "listen", "search", "forgetting"):
+            if s["phase"] == "forgetting":
+                s["mode"] = "forget"
+            self.fail("engine_lost")
+
+    def on_protocol_info(self):
+        if "bluetooth.pair_listen" in self.h.caps:
+            self.listen_ok = True
+
+    def headset_name(self):
+        adapters = self.h.bt_status.get("adapters")
+        cap = self.h.bt_status.get("capability") if isinstance(self.h.bt_status.get("capability"), dict) else {}
+        wanted = str(cap.get("adapter_id") or "")
+        chosen = None
+        for a in adapters if isinstance(adapters, list) else []:
+            if isinstance(a, dict) and a.get("name"):
+                if chosen is None or (wanted and str(a.get("path", "")).endswith("/" + wanted)):
+                    chosen = a
+        return trim(chosen["name"], 40) if chosen else "this headset"
+
+    def blockers(self):
+        """Why pairing cannot start at all. The root-only extras (class, experimental mode) are not needed."""
+        h = self.h
+        if not h.engine_up:
+            return ["The Earshot engine is not running. Wait a moment, or restart the headset."]
+        if not h.bt_status:
+            return ["Checking Bluetooth…"]
+        cap = h.bt_status.get("capability") if isinstance(h.bt_status.get("capability"), dict) else None
+        if not h.bt_status.get("available") or cap is None:
+            return ["The Bluetooth service is not available."]
+        if not cap.get("adapter_present", True):
+            return ["No Bluetooth adapter was found."]
+        if cap.get("powered") is False:
+            return ["Bluetooth is turned off. Turn it on in the headset settings."]
+        return []
+
+    def recheck(self):
+        """Bluetooth became ready while the setup screen was up."""
+        s = self.s
+        if s and s["phase"] == "blocked" and not self.blockers():
+            self.begin_primary()
+
+    # ----- entering and leaving -----
+
+    def start(self):
+        if self.s and self.s["phase"] in ("pairing", "confirm", "forgetting", "listen", "search"):
+            return
+        self.clear()
+        self.s = {"phase": "blocked", "last": self.clock(), "mode": "listen", "busy_tries": 0}
+        if not self.blockers():
+            self.begin_primary()
+
+    def begin_primary(self):
+        if self.listen_ok is False:
+            self.to_search(fallback=True)
+        else:
+            self.start_listen()
+
+    def to_search(self, fallback=False):
+        for name in ("detect", "listen_end", "stall"):
+            self.cancel_timer(name)
+        self.s.update(phase="search", mode="pick", searching=False, searched=False, tries=0, message="",
+                      fallback=fallback, op=None, cancelled=False)
+
+    def keep(self, **extra):
+        self.s.update(extra)
+        self.s["last"] = self.clock()
+
+    def close(self):
+        s = self.s
+        if not s:
+            return
+        if s["phase"] == "confirm":
+            self.confirm(s.get("op"), False)
+            s["cancelled"] = True
+            return
+        if s["phase"] == "pairing" and self.clock() - s["last"] < self.GIVE_UP_AFTER:
+            return
+        if s["phase"] == "forgetting":
+            return
+        self.stop_listening()
+        self.clear()
+
+    def stop_listening(self):
+        s = self.s
+        if s and s["phase"] == "listen" and s.get("op") and not s.get("expired"):
+            self.h.request("bt_pair_listen", operation_id=s["op"], seconds=0)
+
+    def done(self):
+        if self.s and self.s["phase"] in ("almost", "forgotten"):
+            self.clear()
+
+    # ----- primary route: be visible, the phone taps us -----
+
+    def start_listen(self):
+        s = self.s
+        op = self.new_op("listen")
+        s.update(phase="listen", mode="listen", op=op, expired=False, heard=False, cancelled=False, sent=False,
+                 ends_at=time.time() + self.LISTEN_SECONDS, progress="", name="")
+        self.keep()
+        if not self.h.request("bt_pair_listen", operation_id=op, seconds=self.LISTEN_SECONDS):
+            self.fail("engine_lost")
+            return
+        if self.listen_ok is not True:
+            self.timer("detect", self.LISTEN_DETECT, self.listen_unsupported)
+        self.timer("listen_end", self.LISTEN_SECONDS + 5, self.listen_expired)
+
+    def listen_unsupported(self):
+        s = self.s
+        if s and s["phase"] == "listen" and not s.get("heard"):
+            self.listen_ok = False
+            self.to_search(fallback=True)
+
+    def listen_expired(self):
+        s = self.s
+        if s and s["phase"] == "listen":
+            s["expired"] = True
+
+    def listen_again(self):
+        s = self.s
+        if s and s["phase"] == "listen" and (s.get("expired") or time.time() >= s.get("ends_at", 0)):
+            self.start_listen()
+
+    def use_listen(self):
+        """From the search screen back to waiting for the iPhone."""
+        s = self.s
+        if s and s["phase"] == "search" and self.listen_ok is not False and not self.blockers():
+            self.cancel_timer("scan")
+            self.start_listen()
+
+    def use_search(self):
+        """'Pair a different way'."""
+        s = self.s
+        if s and s["phase"] == "listen":
+            self.stop_listening()
+            self.to_search()
+
+    # ----- secondary route: search, pick -----
+
+    def search(self):
+        s = self.s
+        if not s or s["phase"] != "search" or self.blockers():
+            return
+        s.update(searching=True, searched=True, tries=1, message="")
+        self.send_scan()
+
+    def send_scan(self):
+        if not self.h.request("bt_scan"):
+            self.fail("engine_lost")
+            return
+        self.timer("scan", self.SCAN_STALL, self.scan_stalled)
+
+    def scan_stalled(self):
+        s = self.s
+        if s and s["phase"] == "search":
+            s["searching"] = False
+
+    def on_scan_result(self, msg):
+        s = self.s
+        if not s or s["phase"] != "search" or not s.get("searching"):
+            return
+        self.cancel_timer("scan")
+        if not msg.get("success"):
+            if "already" in str(msg.get("message", "")).lower() and s["tries"] < 6:
+                s["tries"] += 1
+                self.timer("scan", 5.0, self.send_scan)
+                return
+            s.update(searching=False, message="Bluetooth could not search just now. Tap Search again.")
+            return
+        if not self.candidates() and s["tries"] < self.SCAN_TRIES:
+            s["tries"] += 1
+            self.send_scan()
+            return
+        s["searching"] = False
+        if not self.candidates():
+            s["message"] = ("Nothing found yet. Make sure the iPhone is showing Settings > Bluetooth, "
+                            "then search again.")
+
+    def candidates(self):
+        out = []
+        for d in self.h.devices:
+            addr = str(d.get("address") or "")
+            if not MAC.match(addr) or d.get("airpods"):
+                continue
+            phone = bool(d.get("apple_nearby") or d.get("iphone"))
+            paired = bool(d.get("paired") or d.get("bonded"))
+            if (paired and not phone) or (not paired and not phone and not d.get("name")):
+                continue
+            out.append({"address": addr.upper(),
+                        "name": trim(d.get("name"), 40) or ("iPhone" if phone else "Unnamed device"),
+                        "iphone": phone, "redo": paired})
+        out.sort(key=lambda c: (not c["iphone"], c["redo"], c["name"].lower()))
+        phones = [c for c in out if c["iphone"]]
+        return (phones + [c for c in out if not c["iphone"]][:6])[:self.MAX_DEVICES]
+
+    def pick(self, address):
+        s = self.s
+        if not s or s["phase"] != "search" or not isinstance(address, str) or not MAC.match(address):
+            return
+        chosen = next((c for c in self.candidates() if c["address"] == address.upper()), None)
+        if chosen is None:
+            return
+        self.cancel_timer("scan")
+        s["searching"] = False
+        self.begin_pick(chosen["address"], chosen["name"], unpair_first=chosen["redo"])
+
+    def begin_pick(self, address, name, unpair_first=False):
+        s = self.s
+        s.update(phase="pairing", mode="pick", address=address, name=name, progress="Connecting to %s…" % name,
+                 code="", cancelled=False, sent=False, after_unpair=False, op=self.new_op("pair"))
+        self.keep()
+        self.timer("stall", self.STALL, lambda: self.fail("stalled"))
+        if unpair_first and not s.get("unpairing"):
+            s["unpairing"] = self.new_op("unpair")
+            self.h.request("bt_unpair", address=address, operation_id=s["unpairing"])
+        if s.get("unpairing"):
+            s.update(after_unpair=True, progress="Clearing the old pairing first…")
+            self.timer("unpair_wait", self.UNPAIR_WAIT, self.send_pair)
+        else:
+            self.send_pair()
+
+    def send_pair(self):
+        s = self.s
+        if not s or s["phase"] != "pairing" or s.get("sent") or s["mode"] != "pick":
+            return
+        s.update(sent=True, after_unpair=False)
+        self.cancel_timer("unpair_wait")
+        if not self.h.request("bt_pair", address=s["address"], operation_id=s["op"]):
+            self.fail("engine_lost")
+
+    # ----- engine events -----
+
+    def mine(self, msg):
+        s = self.s
+        return bool(s and s.get("op") and msg.get("operation_id") == s["op"])
+
+    def heard(self):
+        self.cancel_timer("detect")
+        self.listen_ok = True
+        self.s["heard"] = True
+
+    def on_progress(self, msg):
+        if not self.mine(msg):
+            return
+        s = self.s
+        self.heard()
+        step, detail = str(msg.get("step") or ""), msg.get("detail")
+        if s["phase"] == "listen":
+            if step not in ("connecting", "pairing", "confirm", "confirmed", "paired", "settling", "soliciting",
+                            "already_paired"):
+                self.keep()          # "listening" and anything else: still waiting for the phone
+                return
+            if step == "connecting" and isinstance(detail, str) and detail:
+                s["name"] = trim(detail, 40)
+            s.update(phase="pairing", progress="Your iPhone is connecting…")
+            self.timer("stall", self.STALL, lambda: self.fail("stalled"))
+        if s["phase"] != "pairing":
+            return
+        template = PAIR_WORDS.get(step)
+        if step == "retrying" and isinstance(detail, str) and "directly" in detail:
+            template = "Trying a different way. Notifications may not work with this one."
+        if template:
+            s["progress"] = template.replace("{name}", s.get("name") or "your iPhone")
+        self.keep()
+
+    def on_confirm_request(self, msg):
+        s = self.s
+        if not self.mine(msg) or s["phase"] not in ("pairing", "listen"):
+            return
+        self.heard()
+        digits = re.sub(r"[^0-9]", "", str(msg.get("code") or ""))[:8]
+        s.update(phase="confirm", code=digits or trim(msg.get("code"), 12), progress="")
+        self.keep()
+        self.timer("stall", self.STALL, lambda: self.fail("stalled"))
+        self.h.notify_direct("Earshot: check the pairing code in the Phone tab")
+
+    def confirm(self, op, accept):
+        s = self.s
+        if not s or s["phase"] != "confirm" or not isinstance(accept, bool) or op != s.get("op"):
+            return
+        self.h.request("bt_pair_confirm", operation_id=s["op"], accept=accept)
+        s.update(phase="pairing", progress="Code confirmed. Waiting for the iPhone…" if accept else "Cancelling…")
+        self.keep()
+
+    def on_result(self, msg):
+        s = self.s
+        if not self.mine(msg):
+            return
+        self.cancel_timer("stall")
+        self.heard()
+        status, message = str(msg.get("status") or ""), msg.get("message")
+        address = msg.get("address")
+        if isinstance(address, str) and MAC.match(address):
+            s["address"] = address.upper()
+        if msg.get("success"):
+            self.cancel_timer("listen_end")
+            self.h.request("bt_list_devices")
+            s.update(phase="almost" if msg.get("dual_bond") else "weak", weak=not msg.get("dual_bond"))
+            return
+        if s["phase"] == "listen" and status in ("timeout", "cancelled"):
+            s["expired"] = True      # nobody tapped the headset in time: not a failure
+            return
+        if s.get("cancelled"):
+            self.back_after_cancel()
+            return
+        kind = classify_pair_failure(status, message)
+        if kind == "busy" and s["busy_tries"] < self.BUSY_TRIES:
+            s["busy_tries"] += 1
+            s.update(phase="pairing", progress="Another pairing is still finishing. Waiting a moment…")
+            self.timer("busy", self.BUSY_DELAY, self.retry_after_busy)
+            return
+        self.fail(kind)
+
+    def retry_after_busy(self):
+        s = self.s
+        if not s or s["phase"] != "pairing":
+            return
+        if s["mode"] == "listen":
+            self.start_listen()
+        else:
+            self.begin_pick(s["address"], s.get("name") or "your iPhone")
+
+    def back_after_cancel(self):
+        s = self.s
+        if s["mode"] == "listen":
+            self.clear()
+        else:
+            s.update(phase="search", searching=False, op=None, cancelled=False)
+
+    def fail(self, kind):
+        s = self.s
+        if not s:
+            return
+        for name in ("stall", "detect", "busy", "listen_end", "scan", "unpair_wait"):
+            self.cancel_timer(name)
+        s.update(phase="failed", kind=kind)
+        self.keep()
+        if kind == "stale" and s.get("address") and not s.get("unpairing"):
+            # Clear our side now, so Try again starts clean once the iPhone has forgotten too.
+            s["unpairing"] = self.new_op("unpair")
+            self.h.request("bt_unpair", address=s["address"], operation_id=s["unpairing"])
+
+    def on_unpair_result(self, msg):
+        s = self.s
+        op = msg.get("operation_id")
+        if not s or not op or op != s.get("unpairing"):
+            return
+        s["unpairing"] = None
+        self.h.request("bt_list_devices")
+        if s["phase"] == "forgetting":
+            self.cancel_timer("unpair_wait")
+            if msg.get("success") or msg.get("status") == "not_found":
+                self.h.request("bt_set_device", address="")
+                s["phase"] = "forgotten"
+            else:
+                s.update(phase="failed", kind="other", mode="forget")
+        elif s["phase"] == "pairing" and s.get("after_unpair"):
+            self.send_pair()
+
+    # ----- actions on result screens -----
+
+    def retry(self):
+        s = self.s
+        if not s:
+            return
+        if s["phase"] == "failed":
+            if s.get("mode") == "forget":
+                self.forget_ask()
+                return
+            s["busy_tries"] = 0
+            if s.get("kind") == "not_found" or (s["mode"] == "pick" and not s.get("address")):
+                self.to_search()
+                self.search()
+            elif s["mode"] == "listen":
+                self.start_listen()
+            else:
+                self.begin_pick(s["address"], s.get("name") or "your iPhone")
+        elif s["phase"] == "weak":
+            s["busy_tries"] = 0
+            address = s.get("address")
+            if address and s["mode"] == "pick":
+                self.begin_pick(address, s.get("name") or "your iPhone", unpair_first=True)
+            else:
+                if address and not s.get("unpairing"):
+                    s["unpairing"] = self.new_op("unpair")
+                    self.h.request("bt_unpair", address=address, operation_id=s["unpairing"])
+                self.start_listen()
+
+    def keep_weak(self):
+        if self.s and self.s["phase"] == "weak":
+            self.s["phase"] = "almost"
+
+    # ----- forget -----
+
+    def forget_ask(self):
+        if self.s and self.s["phase"] in ("pairing", "confirm", "forgetting"):
+            return
+        if not self.h.phone_paired():
+            return
+        self.clear()
+        self.s = {"phase": "forget", "last": self.clock(), "mode": "forget", "busy_tries": 0}
+
+    def forget_do(self):
+        s = self.s
+        address = self.h.bt_status.get("device_address")
+        if not s or s["phase"] != "forget" or not isinstance(address, str) or not MAC.match(address):
+            return
+        s.update(phase="forgetting", address=address.upper(), unpairing=self.new_op("unpair"))
+        if not self.h.request("bt_unpair", address=address, operation_id=s["unpairing"]):
+            s.update(phase="failed", kind="engine_lost")
+            return
+        self.timer("unpair_wait", 20.0, lambda: s.update(phase="failed", kind="stalled", mode="forget"))
+
+    # ----- what the page draws -----
+
+    def checklist(self):
+        c, weak = self.h.conn, bool(self.s.get("weak"))
+
+        def perm(is_open, error, waiting="Waiting for the iPhone…"):
+            if is_open:
+                return "on", "Working."
+            if error == "forbidden":
+                return "off", "Still off on the iPhone."
+            if error == "busy":
+                return "off", "Another device is using this. Turn it off there first."
+            return "waiting", waiting
+
+        n_state, n_note = perm(c.get("ancs_ready"), "",
+                               "It can take a minute to appear. Close and reopen that iPhone screen.")
+        if weak and n_state != "on":
+            n_state, n_note = "off", "This pairing cannot carry notifications."
+        m_state, m_note = perm(c.get("map_open"), c.get("map_error"), "Needs Show Notifications and Sync Contacts.")
+        p_state, p_note = perm(c.get("pbap_open"), c.get("pbap_error"))
+        recents = bool(self.h.call_history)
+        return [
+            {"id": "notifications", "label": "Show Notifications", "state": n_state, "note": n_note,
+             "essential": not weak},
+            {"id": "messages", "label": "Text messages", "state": m_state, "note": m_note, "essential": True},
+            {"id": "contacts", "label": "Sync Contacts", "state": p_state, "note": p_note, "essential": False},
+            {"id": "favorites", "label": "Phone Favorites", "state": "unknown",
+             "note": "Turn it on. Earshot cannot check this one.", "essential": False},
+            {"id": "recents", "label": "Phone Recents", "state": "on" if recents else "unknown",
+             "note": "Working." if recents else "Turn it on. Earshot cannot check this one.", "essential": False},
+        ]
+
+    def view(self):
+        s = self.s
+        if not s:
+            return None
+        phase = s["phase"]
+        v = {"phase": phase, "headset": self.headset_name()}
+        if phase == "blocked":
+            v["reasons"] = self.blockers()
+        elif phase == "listen":
+            v.update(ends_at=int(s["ends_at"]), expired=bool(s.get("expired")), seconds=self.LISTEN_SECONDS)
+        elif phase == "search":
+            v.update(searching=bool(s["searching"]), searched=bool(s["searched"]), message=s.get("message", ""),
+                     devices=self.candidates() if s["searched"] else [], fallback=bool(s.get("fallback")),
+                     can_listen=self.listen_ok is not False)
+        elif phase == "pairing":
+            v.update(name=s.get("name") or "", progress=s.get("progress", ""),
+                     can_close=self.clock() - s["last"] >= self.GIVE_UP_AFTER)
+        elif phase == "confirm":
+            v.update(name=s.get("name") or "", code=s.get("code", ""), op=s["op"])
+        elif phase == "failed":
+            title, text, button = FAILURES.get(s.get("kind"), FAILURES["other"])
+            v.update(kind=s.get("kind"), title=title, text=text, button=button, forget=s.get("mode") == "forget")
+        elif phase == "weak":
+            v["name"] = s.get("name") or ""
+        elif phase == "almost":
+            items = self.checklist()
+            v.update(items=items, weak=bool(s.get("weak")),
+                     ready=all(i["state"] == "on" for i in items if i["essential"]),
+                     connected=bool(self.h.conn.get("classic_connected") or self.h.conn.get("le_connected")),
+                     reason=trim(self.h.conn.get("link_reason") or "", 160))
+        return v
+
+
+# ---------------------------------------------------------------------------
 # The helper
 # ---------------------------------------------------------------------------
 
@@ -924,6 +1536,7 @@ class Helper:
         self.bt_status = {}
         self.conn = {}
         self.devices = []
+        self.devices_seen = False
         self.notifications = collections.OrderedDict()   # uid -> dict, oldest first
         self.cleared = set()
         self.known_apps = {}                             # app_id -> name
@@ -970,6 +1583,7 @@ class Helper:
         self.stopping = False
 
         self.version, self.script = self.load_menu(menu_file)
+        self.pairing = Pairing(self)
         self.link = TetherLink(self.loop, connect_tether, self.on_tether, self.on_tether_state, tether_backoff)
         self.shell = Shell(self.loop, self.version, self.script, self.on_action, self.on_page_ready,
                            cdp_base=cdp_base, http_get=http_get, ws_factory=ws_factory)
@@ -1016,6 +1630,7 @@ class Helper:
 
     def on_tether_state(self, up):
         self.engine_up = up
+        self.pairing.engine_reset(up)
         if up:
             self.ancs_ready_at = None
             self.map_open_at = None
@@ -1040,6 +1655,7 @@ class Helper:
     def t_protocol_info(self, msg):
         caps = msg.get("capabilities")
         self.caps = [c for c in caps if isinstance(c, str)] if isinstance(caps, list) else []
+        self.pairing.on_protocol_info()
         # Everything below is a read; ask for each once per connection.
         for command in ("bt_status", "bt_connection", "bt_list_devices", "bt_list_threads",
                         "bt_list_notifications", "bt_list_calls", "bt_list_call_history"):
@@ -1048,11 +1664,13 @@ class Helper:
 
     def t_bt_status(self, msg):
         self.bt_status = msg
+        self.pairing.recheck()
         self.dirty()
 
     def t_bt_devices(self, msg):
         devices = msg.get("devices")
         self.devices = [d for d in devices if isinstance(d, dict)] if isinstance(devices, list) else []
+        self.devices_seen = True
         self.enforce_hfp()
         self.dirty()
 
@@ -1192,6 +1810,44 @@ class Helper:
 
     def t_error(self, msg):
         log.info("tether: error reply")
+        if "detect" in self.pairing.timers:   # the daemon answered bt_pair_listen with an error: it does not know it
+            self.pairing.listen_unsupported()
+            self.dirty()
+
+    # pairing events: the Pairing class owns what they mean
+    def t_bt_scan_result(self, msg):
+        self.pairing.on_scan_result(msg)
+        self.dirty()
+
+    def t_bt_pair_progress(self, msg):
+        self.pairing.on_progress(msg)
+        self.dirty()
+
+    def t_bt_pair_confirm_request(self, msg):
+        self.pairing.on_confirm_request(msg)
+        self.dirty()
+
+    def t_bt_pair_result(self, msg):
+        self.pairing.on_result(msg)
+        self.dirty()
+
+    def t_bt_unpair_result(self, msg):
+        self.pairing.on_unpair_result(msg)
+        self.dirty()
+
+    def notify_direct(self, text):
+        """A SteamVR notification that does not depend on the alert settings (it asks for a person's attention)."""
+        if self.exists(self.vrcmd):
+            self.exec.run([self.vrcmd, "--notify", text], None, timeout=20)
+
+    def phone_paired(self):
+        address = str(self.bt_status.get("device_address") or "").lower()
+        if not address:
+            return False
+        for d in self.devices:
+            if str(d.get("address", "")).lower() == address:
+                return bool(d.get("paired", True) or d.get("bonded", False))
+        return not self.devices_seen
 
     def note_app(self, n):
         app_id = n.get("app_id")
@@ -1415,6 +2071,47 @@ class Helper:
     def a_retry(self, a):
         self.link.reconnect_now()
 
+    # ----- pairing actions (the page cannot do anything the Pairing class does not allow) -----
+
+    def a_pair_start(self, a):
+        self.pairing.start()
+
+    def a_pair_listen_again(self, a):
+        self.pairing.listen_again()
+
+    def a_pair_listen(self, a):
+        self.pairing.use_listen()
+
+    def a_pair_other(self, a):
+        self.pairing.use_search()
+
+    def a_pair_search(self, a):
+        self.pairing.search()
+
+    def a_pair_pick(self, a):
+        self.pairing.pick(a.get("address"))
+
+    def a_pair_confirm(self, a):
+        self.pairing.confirm(a.get("op"), a.get("accept"))
+
+    def a_pair_retry(self, a):
+        self.pairing.retry()
+
+    def a_pair_keep(self, a):
+        self.pairing.keep_weak()
+
+    def a_pair_close(self, a):
+        self.pairing.close()
+
+    def a_pair_done(self, a):
+        self.pairing.done()
+
+    def a_forget_ask(self, a):
+        self.pairing.forget_ask()
+
+    def a_forget_do(self, a):
+        self.pairing.forget_do()
+
     def a_open_thread(self, a):
         thread = a.get("thread")
         if not isinstance(thread, str) or not any(t.get("thread") == thread and not t.get("group") for t in self.threads):
@@ -1610,9 +2307,10 @@ class Helper:
             reasons = [trim(r, 160) for r in (cap or {}).get("reasons", []) if isinstance(r, str)][:4]
             return {"kind": "no_bluetooth", "title": "Bluetooth is not ready for Earshot",
                     "text": " ".join(reasons) or "The Bluetooth service is not available.", "steps": steps}
-        if self.bt_status and not self.bt_status.get("device_address"):
+        if self.bt_status and not self.phone_paired():
             return {"kind": "no_phone", "title": "No iPhone is paired yet",
-                    "text": "Pair your iPhone with Earshot first. The Earshot README has the steps.", "steps": []}
+                    "text": "Pair your iPhone with Earshot. It takes about a minute.", "steps": [],
+                    "action": {"act": "pair-start", "label": "Pair iPhone"}}
         cap_steps = [{"what": s.get("what", ""), "command": s.get("command", "")}
                      for s in (cap or {}).get("setup", []) if isinstance(s, dict)][:6]
         if cap_steps and not self.conn.get("classic_connected") and not self.conn.get("le_connected"):
@@ -1630,6 +2328,7 @@ class Helper:
         calls = self.conn.get("calls") if isinstance(self.conn.get("calls"), dict) else {}
         return {
             "name": name,
+            "paired": self.phone_paired(),
             "connected": bool(self.conn.get("classic_connected") or self.conn.get("le_connected") or self.conn.get("ancs_ready")),
             "battery": battery if isinstance(battery, int) else None,
             "messages": bool(self.conn.get("map_open")),
@@ -1690,6 +2389,7 @@ class Helper:
         return {
             "v": 1,
             "setup": self.setup_state(),
+            "pair": self.pairing.view(),
             "phone": self.phone_view(),
             "priority": {"mode": self.settings.get("priority"), "frame_active": self.frame_active(), "worn": self.worn},
             "calls": self.calls_view(),
