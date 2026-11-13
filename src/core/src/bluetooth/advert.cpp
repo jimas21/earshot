@@ -35,7 +35,7 @@ namespace tether::bluetooth {
     <property name='ServiceData' type='a{sv}' access='read'/>
     <property name='Discoverable' type='b' access='read'/>
     <property name='Timeout' type='q' access='read'/>
-    <property name='LocalName' type='s' access='read'/>
+    <property name='Includes' type='as' access='read'/>
   </interface>
 </node>)XML";
 
@@ -97,8 +97,14 @@ namespace tether::bluetooth {
             if (prop == "Timeout")
                 return g_variant_new_uint16(ADVERT_TIMEOUT_SECONDS);
 
-            if (prop == "LocalName")
-                return g_variant_new_string("Tether");
+            // The adapter's own name, filled in by BlueZ. A fixed name here made the phone list this computer
+            // twice under two names (the Classic name and this one), and either could be tapped.
+            if (prop == "Includes") {
+                GVariantBuilder builder;
+                g_variant_builder_init(&builder, G_VARIANT_TYPE("as"));
+                g_variant_builder_add(&builder, "s", "local-name");
+                return g_variant_builder_end(&builder);
+            }
 
             return nullptr;
         }
