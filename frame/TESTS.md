@@ -54,11 +54,40 @@ Pass: steps 5 to 9 work. Also note idle CPU and memory of `tetherd` (`top -p`).
 
 ## 3. Pop-up over a running game
 
-Using the Tragus CEF route, raise a Steam toast from the SharedJSContext while an
-OpenXR game is running. Check whether it shows in the headset without opening the
-dashboard.
+While an OpenXR game is running, from SSH:
 
-Pass: it shows. Fail: plan the SteamVR overlay fallback.
+```bash
+/opt/steamvr/bin/linuxarm64/vrcmd --notify "Earshot test: does this show over the game?"
+```
+
+Check that it shows in the headset without opening the dashboard, and how long a text it
+shows before cutting off.
+
+Pass: it shows. Fail: try a Steam toast raised from the SharedJSContext (the Tragus CEF
+route); if neither shows, plan the SteamVR overlay fallback.
+
+## 3b. Earshot package (no release yet)
+
+Before any release exists, install the CI build by hand: download the
+`earshot-engine` and `earshot-frame` artifacts from the latest green run on `frame`,
+copy both tarballs to the headset, unpack the frame tarball and run its `install.sh`
+with the engine tarball beside it (see `frame/install/install.sh` for the expected
+layout). Stop the upstream Tether test daemon from test 2 first. Then:
+
+1. `systemctl --user status earshot-tetherd earshot-steamui --no-pager`: both running.
+2. `ss -ltn | grep 5134`: nothing (the engine runs with `TETHER_NO_TCP=1`).
+3. Restart the headset once (for Steam's DevTools switch). The **Phone** tab appears in the
+   quick menu next to Tragus's tab, and the phone's name and connection show in it.
+4. A text arrives: a SteamVR notification shows, the message appears under Messages.
+5. Reply from the Phone tab: focusing the text field brings up the Frame keyboard; the
+   reply arrives on the other phone; the tab shows "sent".
+6. A call: notification plus the Answer/Decline card; Decline ends it on the phone.
+7. Settings: switch Priority to "Always phone": no notifications in the headset, calls
+   stay on the phone. Back to Auto.
+8. `top`: idle CPU and memory of `tetherd` and `earshot-steamui.py` against the budget in
+   PLAN.md.
+9. `Uninstall-Earshot.desktop` (or `uninstall.sh`): the tab goes, the system setup offers
+   its undo, nothing of Tragus is touched.
 
 ## 4. Presence sensor
 

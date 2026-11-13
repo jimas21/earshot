@@ -691,6 +691,8 @@ class ShellTests(unittest.TestCase):
             self.assertEqual(len(page["scripts"]), 1)
             self.assertNotIn("__VERSION__", page["scripts"][0])
             self.assertNotIn("__BINDING__", page["scripts"][0])
+        # The fake engine's device list can land after the first state push: wait for it.
+        self.assertTrue(rig.pump(lambda: ((rig.state() or {}).get("phone") or {}).get("name") == "Test Phone", 3))
         st = rig.state()
         self.assertEqual(st["phone"]["name"], "Test Phone")
         self.assertEqual(st["phone"]["battery"], 80)
