@@ -1,0 +1,7 @@
+{
+  "name": "earshot-menu-tests",
+  "private": true,
+  "description": "Tests for frame/menu/earshot-menu.js (run: npm install && npm test)",
+  "scripts": { "test": "node --test --test-force-exit" },
+  "devDependencies": { "jsdom": "26.1.0" }
+}
