@@ -414,6 +414,19 @@ Only one pairing transaction runs at a time; a second returns
 `{"status": "busy"}`. A successful pair selects the device and starts
 supervision.
 
+#### `bt_pair_listen` (Client -> Daemon)
+**Payload**: `{"command": "bt_pair_listen", "operation_id": "listen-1", "seconds": 120}`
+Phone-initiated pairing, which needs no experimental BlueZ and no root. The adapter is made
+discoverable and pairable for `seconds` (BlueZ's own timeouts, so a daemon that dies cannot leave it
+open), the ANCS solicitation stays on air, and the pairing agent serves the first phone that asks.
+The user taps the computer in the iPhone's Bluetooth settings. Events carry the `operation_id`:
+`bt_pair_progress` with `step` `listening`, `connecting` (`detail` is the phone's name), `confirm`,
+`confirmed`, `paired`, `settling`, `soliciting`; `bt_pair_confirm_request` with the code, answered
+with `bt_pair_confirm`; and one `bt_pair_result` whose `status` is `paired`, `timeout` (nobody
+connected, or the phone did not finish), `rejected`, `cancelled`, `busy` or `error`. `dual_bond` is
+true when the bond offers ANCS. `seconds` of 0 stops a running listen. Shares the one-at-a-time rule
+with `bt_pair`. Advertised as the `bluetooth.pair_listen` capability.
+
 #### `bt_set_device` (Client -> Daemon)
 **Payload**: `{"command": "bt_set_device", "address": "AA:BB:CC:DD:EE:FF"}`
 Points supervision at an already-bonded phone.

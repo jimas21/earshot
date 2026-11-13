@@ -102,6 +102,28 @@ that can never connect and a bond that never looks dual.
 
 **`obexd` must be running** (user service `obex`) for MAP and PBAP. It is socket-activated under normal use.
 
+## Running without root
+
+`TETHER_NO_ROOT=1` runs the daemon as a normal user on a stock `bluetoothd`: nothing in `/etc`
+changes, nothing needs a password, and `--experimental` is not required.
+
+- **Pairing is started by the phone** (`bt_pair_listen`). The adapter is made discoverable and
+  pairable for a bounded time, the ANCS solicitation advertisement stays on air, and the user taps the
+  computer on the iPhone. The bond that follows is the one iOS derives for both transports.
+- **The LE half is read from `Device1`**: the device is paired and offers the ANCS service in `UUIDs`.
+  `Bearer.LE1` is not used, and `PreferredBearer` is never written, when `bluetoothd` is not running
+  with `--experimental`. Reconnecting is the phone's job: it answers the solicitation advertisement.
+- **The class of device and L2CAP ERTM are reported, not required.** `bt_status` lists them under
+  `reasons`; `setup` stays empty. Changing the class (major 4, minor 8) and `bluetooth.disable_ertm`
+  both need administrator rights, so they are left alone. Whether the iPhone then offers Messages and
+  Contacts, and whether MAP and PBAP open or report `forbidden`, is what decides, not the class bit.
+- **An HFP Hands-Free record is registered from the daemon** through
+  `org.bluez.ProfileManager1.RegisterProfile`, only when no audio server has registered one, so BlueZ
+  sets the Audio service bit without a class change. It accepts no connections.
+- **Call control defaults on** and uses whichever stack serves the phone (BlueZ's `Telephony1`, else
+  PipeWire's telephony API). `TETHER_CALLS=0` turns it off. Call audio stays on the phone.
+- `TETHER_RETENTION=none|plaintext|encrypted` sets the default journal retention until the user picks.
+
 ## Pairing strategies
 
 Two ways to make the bond, recorded in `auth_strategy` in `$XDG_CONFIG_HOME/tether/bluetooth.json`
