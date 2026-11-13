@@ -12,7 +12,7 @@ add_library(tether STATIC
     src/client.cpp
     src/extension_host.cpp
     src/service.cpp
-    src/discovery.cpp
+    src/discovery_group.cpp
     src/mpris.cpp
     src/audio.cpp
     src/bluetooth/objects.cpp
@@ -54,6 +54,12 @@ add_library(tether STATIC
 
 pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0 gio-2.0)
 
+if(TETHER_MDNS)
+    target_sources(tether PRIVATE src/discovery.cpp)
+else()
+    target_sources(tether PRIVATE src/discovery_stub.cpp)
+endif()
+
 target_include_directories(tether PUBLIC
     include
     ${CMAKE_BINARY_DIR}/generated
@@ -72,10 +78,12 @@ target_link_libraries(tether PUBLIC
     PkgConfig::WAYLAND
     OpenSSL::SSL
     OpenSSL::Crypto
-    PkgConfig::AVAHI
     PkgConfig::GLIB
     Intl::Intl
 )
+if(TETHER_MDNS)
+    target_link_libraries(tether PUBLIC PkgConfig::AVAHI)
+endif()
 if(TETHER_LIBSECRET)
     target_link_libraries(tether PUBLIC PkgConfig::SECRET)
     target_compile_definitions(tether PRIVATE TETHER_LIBSECRET)
