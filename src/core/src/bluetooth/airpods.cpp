@@ -144,8 +144,10 @@ namespace tether::bluetooth {
                 const size_t at = static_cast<size_t>(i) * 3;
                 if (i < 5 && text[at + 2] != ':')
                     return false;
+                // Keep the substring alive: `end` points into it.
+                const std::string pair = text.substr(at, 2);
                 char* end = nullptr;
-                const long byte = std::strtol(text.substr(at, 2).c_str(), &end, 16);
+                const long byte = std::strtol(pair.c_str(), &end, 16);
                 if (end == nullptr || *end != '\0' || byte < 0 || byte > 0xff)
                     return false;
                 out[5 - i] = static_cast<uint8_t>(byte);
