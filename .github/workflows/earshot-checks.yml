@@ -1,0 +1,242 @@
+name: Earshot checks
+
+# Whole-codebase checks: Tether's original code plus our changes. Nothing here produces a
+# release artifact; earshot-arm64.yml does that.
+#   upstream   full build (everything ON) and the unit tests, x86_64 and aarch64
+#   headless   the headless configuration Earshot ships, x86_64 and aarch64
+#   sanitizers Debug build with ASan + UBSan, tests run under them
+#   warnings   -Wall -Wextra and cppcheck; fails only on NEW warnings in files we changed
+#   frame      Python and JS tests, py_compile, pyflakes, shellcheck for frame/
+#   secrets    gitleaks over the full git history
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'frame'
+      - 'frame-*'
+      - 'frame/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Last commit before our first change: the fork point from upstream Tether.
+  FORK_POINT: adb03f6
+
+jobs:
+  upstream:
+    name: Full build and tests (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Upstream's own dependency script: wayland, avahi, libsecret, GTK 3, libnotify,
+      # ncurses, ffmpeg, pipewire, npm, gettext. Everything ON.
+      - name: Install dependencies
+        run: sudo ./scripts/ci-deps.sh
+      - name: Configure (defaults, tests ON)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)"
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
+
+  headless:
+    name: Headless build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ make pkg-config git ca-certificates \
+            libssl-dev libglib2.0-dev gettext
+      # The options earshot-arm64.yml ships. CMakeLists.txt switches the unit tests off
+      # when any optional piece is off (they link the whole daemon), so BUILD_TESTING=ON
+      # here is only to prove that rule: there is no ctest to run in this configuration.
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DTETHER_WAYLAND=OFF -DTETHER_MDNS=OFF -DTETHER_LIBSECRET=OFF -DTETHER_LIBNOTIFY=OFF \
+            -DTETHER_BUILD_GTK=OFF -DTETHER_BUILD_TUI=OFF \
+            -DTETHER_CAMERA=OFF -DTETHER_BUILD_EXTENSIONS=OFF | tee configure.log
+          grep -q "not building the unit tests" configure.log
+      - name: Build everything that configuration has
+        run: cmake --build build --parallel "$(nproc)"
+      - name: Run
+        run: |
+          ./build/tether --version
+          if ldd build/tetherd | grep -Ei 'wayland|avahi|secret|notify|gtk'; then exit 1; fi
+
+  sanitizers:
+    name: ASan and UBSan tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ASAN_OPTIONS: detect_leaks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install dependencies
+        run: sudo ./scripts/ci-deps.sh
+      - name: Configure
+        run: |
+          san="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+            -DTETHER_BUILD_EXTENSIONS=OFF \
+            -DCMAKE_C_FLAGS="${san}" -DCMAKE_CXX_FLAGS="${san}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${san}" -DCMAKE_SHARED_LINKER_FLAGS="${san}"
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)"
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
+
+  warnings:
+    name: Warnings and cppcheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install dependencies
+        run: |
+          sudo ./scripts/ci-deps.sh
+          sudo apt-get install -y --no-install-recommends cppcheck
+      - name: Files we changed since forking
+        run: |
+          git diff --name-only "${FORK_POINT}..HEAD" -- src/ > changed.txt
+          echo "changed since ${FORK_POINT}:"; cat changed.txt
+          git worktree add "${RUNNER_TEMP}/base" "${FORK_POINT}"
+      # Same configuration at the fork point and at HEAD, so a warning only counts as new
+      # when the fork point did not have it. Upstream's own warnings are reported, never
+      # failed on.
+      - name: Compile with -Wall -Wextra (HEAD and fork point)
+        run: |
+          flags="-Wall -Wextra"
+          for name in head base; do
+            tree=.; [ "${name}" = head ] || tree="${RUNNER_TEMP}/base"
+            cmake -S "${tree}" -B "${RUNNER_TEMP}/build-${name}" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+              -DBUILD_TESTING=OFF -DTETHER_BUILD_EXTENSIONS=OFF \
+              -DCMAKE_C_FLAGS="${flags}" -DCMAKE_CXX_FLAGS="${flags}" > /dev/null
+            cmake --build "${RUNNER_TEMP}/build-${name}" --parallel "$(nproc)" > "${RUNNER_TEMP}/gcc-${name}.log" 2>&1
+          done
+      - name: Report compiler warnings
+        run: |
+          set +e
+          python3 .github/scripts/warn_diff.py --title "Compiler warnings (-Wall -Wextra)" \
+            --head "${RUNNER_TEMP}/gcc-head.log" --head-root "${PWD}" \
+            --base "${RUNNER_TEMP}/gcc-base.log" --base-root "${RUNNER_TEMP}/base" \
+            --changed changed.txt > gcc-summary.md
+          echo $? > gcc-status
+          cat gcc-summary.md >> "${GITHUB_STEP_SUMMARY}"
+      - name: cppcheck (HEAD and fork point)
+        run: |
+          tmpl='{file}:{line}:{column}: {severity}: {message} [{id}]'
+          run_cppcheck() {  # $1 = tree, $2 = log
+            (cd "$1" && cppcheck --enable=warning,performance,portability --inline-suppr \
+               --suppress=missingIncludeSystem --template="${tmpl}" -j "$(nproc)" -q src 2> "$2")
+          }
+          run_cppcheck "${PWD}" "${RUNNER_TEMP}/cpp-head.log"
+          run_cppcheck "${RUNNER_TEMP}/base" "${RUNNER_TEMP}/cpp-base.log"
+          set +e
+          python3 .github/scripts/warn_diff.py --title "cppcheck (warning, performance, portability)" \
+            --head "${RUNNER_TEMP}/cpp-head.log" --head-root "${PWD}" \
+            --base "${RUNNER_TEMP}/cpp-base.log" --base-root "${RUNNER_TEMP}/base" \
+            --changed changed.txt > cpp-summary.md
+          echo $? > cpp-status
+          cat cpp-summary.md >> "${GITHUB_STEP_SUMMARY}"
+      - name: Fail on new warnings in files we changed
+        run: |
+          rc=0
+          [ "$(cat gcc-status)" = 0 ] || { echo "::error::new compiler warnings in files changed since ${FORK_POINT}"; rc=1; }
+          [ "$(cat cpp-status)" = 0 ] || { echo "::error::new cppcheck findings in files changed since ${FORK_POINT}"; rc=1; }
+          exit "${rc}"
+
+  frame:
+    name: Frame Python, JS and shell
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+          python3 -m venv "${RUNNER_TEMP}/venv"
+          "${RUNNER_TEMP}/venv/bin/pip" install --quiet pyflakes==3.4.0
+          node --version; python3 --version
+      - name: Python tests (helper and menu)
+        run: python3 -m unittest discover -s frame/tests -p 'test_*.py' -v
+      - name: Python tests (installer, POSIX ones included)
+        run: python3 -m unittest discover -s frame/install/tests -v
+      - name: JS tests (jsdom)
+        working-directory: frame/tests/js
+        run: |
+          npm ci
+          npm test
+      - name: Syntax and lint
+        run: |
+          mapfile -t py < <(git ls-files 'frame/*.py')
+          mapfile -t sh < <(git ls-files 'frame/*.sh')
+          python3 -m py_compile "${py[@]}"
+          "${RUNNER_TEMP}/venv/bin/pyflakes" "${py[@]}"
+          shellcheck "${sh[@]}"
+          for js in $(git ls-files 'frame/*.js'); do node --check "${js}"; done
+
+  secrets:
+    name: Secrets scan (full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (pinned release, checksum verified)
+        run: |
+          f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "${RUNNER_TEMP}/${f}" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${f}"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${f}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/gl" && tar -xzf "${RUNNER_TEMP}/${f}" -C "${RUNNER_TEMP}/gl" gitleaks
+      - name: Scan every commit
+        run: |
+          git log --oneline | wc -l
+          "${RUNNER_TEMP}/gl/gitleaks" git --redact --verbose --no-banner --exit-code 1 .
