@@ -205,6 +205,100 @@ class ScriptRunTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("missing", r.stderr)
 
+    def test_keep_setup_keeps_only_the_setup_scripts(self):
+        frame = os.path.join(self.data, "frame")
+        for n in ("earshot-system-setup.sh", "earshot-system-setup.py", "earshot-system-setup.py.sha256", "other.txt"):
+            with open(os.path.join(frame, n), "w") as f:
+                f.write("x")
+        self.sh("install.sh")
+        r = self.sh("uninstall.sh", "--keep-setup")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sorted(os.listdir(self.data)), ["frame"])
+        self.assertEqual(sorted(os.listdir(frame)),
+                         ["earshot-system-setup.py", "earshot-system-setup.py.sha256", "earshot-system-setup.sh"])
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".config/systemd/user/earshot-tetherd.service")))
+
+    def test_uninstall_runs_the_helpers_teardown_first(self):
+        usr_python = "/usr/bin/python3"
+        if not os.path.exists(usr_python):
+            self.skipTest("no /usr/bin/python3")
+        marker = os.path.join(self.home, "teardown-ran")
+        with open(os.path.join(self.data, "frame", "earshot-steamui.py"), "w") as f:
+            f.write("import sys\nopen(%r, 'w').write(' '.join(sys.argv[1:]))\n" % marker)
+        self.assertEqual(self.sh("uninstall.sh").returncode, 0)
+        with open(marker) as f:
+            self.assertEqual(f.read(), "--teardown")
+        self.assertFalse(os.path.exists(self.data))
+
+
+@unittest.skipUnless(SH and os.name == "posix" and os.path.exists("/usr/bin/python3")
+                     and os.path.exists("/usr/bin/sha256sum"), "needs a Unix sh and /usr/bin tools")
+class SystemSetupRootStepTests(unittest.TestCase):
+    """The part of earshot-system-setup.sh that runs as root, exercised as an ordinary user:
+    it must run a root-owned copy of the script, and only when its sha256 matches."""
+
+    def snippet(self):
+        text = read("earshot-system-setup.sh")
+        start = text.index("root_script='") + len("root_script='")
+        return text[start:text.index("'\n", start)]
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.py = os.path.join(self.dir, "setup.py")
+        with open(self.py, "w") as f:
+            f.write("import sys\nprint('ran', *sys.argv[1:])\n")
+        import hashlib
+        with open(self.py, "rb") as f:
+            self.good = hashlib.sha256(f.read()).hexdigest()
+
+    def run_snippet(self, digest):
+        return subprocess.run([SH, "-c", self.snippet(), "sh", self.py, digest, "--apply"],
+                              capture_output=True, text=True, timeout=30)
+
+    def test_matching_hash_runs_the_script_with_the_action(self):
+        r = self.run_snippet(self.good)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "ran --apply --yes")
+
+    def test_mismatch_runs_nothing(self):
+        r = self.run_snippet("0" * 64)
+        self.assertEqual(r.returncode, 3)
+        self.assertNotIn("ran", r.stdout)
+        self.assertIn("does not match", r.stderr)
+
+    def test_the_copy_is_what_runs_not_the_file_on_disk(self):
+        text = self.snippet()
+        self.assertIn('/usr/bin/cp -- "$1" "$tmp/setup.py"', text)
+        self.assertIn('/usr/bin/python3 -I "$tmp/setup.py"', text)
+        self.assertNotIn('-I "$1"', text)
+
+    def test_nothing_elevated_uses_a_path_resolved_python_or_the_user_file(self):
+        text = read("earshot-system-setup.sh")
+        self.assertNotIn("command -v python3", text)
+        for line in text.splitlines():
+            words = line.replace("|", " ").split()
+            if words and not words[0].startswith("#") and ("pkexec" in words or "sudo" in words)                     and "command" not in words:
+                self.assertIn('/bin/sh -c "$root_script"', line, line)
+                self.assertNotIn('"$python"', line, line)
+                self.assertNotIn("-I", line, line)
+
+    def test_missing_checksum_refuses_before_any_elevation(self):
+        # run the whole script, answering yes, with a fake pkexec/sudo that would leave a mark
+        bindir = os.path.join(self.dir, "bin")
+        os.makedirs(bindir)
+        mark = os.path.join(self.dir, "elevated")
+        for tool in ("pkexec", "sudo"):
+            with open(os.path.join(bindir, tool), "w") as f:
+                f.write("#!/bin/sh\ntouch %s\n" % mark)
+            os.chmod(os.path.join(bindir, tool), 0o755)
+        for n in ("earshot-system-setup.sh", "earshot-system-setup.py"):
+            shutil.copy(os.path.join(INSTALL, n), self.dir)
+        env = {"HOME": self.dir, "PATH": bindir + os.pathsep + os.environ.get("PATH", ""), "DISPLAY": ":0"}
+        r = subprocess.run([SH, os.path.join(self.dir, "earshot-system-setup.sh"), "--undo"], env=env,
+                           input="y\n", capture_output=True, text=True, timeout=30)
+        self.assertFalse(os.path.exists(mark), r.stdout + r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

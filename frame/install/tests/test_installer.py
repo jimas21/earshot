@@ -120,6 +120,26 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(ei.version_key(""), ())
         self.assertEqual(ei.version_key(None), ())
 
+    def test_prereleases_sort_before_the_release(self):
+        k = ei.version_key
+        self.assertLess(k("1.0.0-rc.1"), k("1.0.0"))
+        self.assertLess(k("v1.0.0-rc.1"), k("v1.0.0"))
+        self.assertLess(k("1.0.0-rc.1"), k("1.0.0-rc.2"))
+        self.assertLess(k("1.0.0-rc.2"), k("1.0.0-rc.10"))
+        self.assertLess(k("1.0.0-alpha"), k("1.0.0-alpha.1"))
+        self.assertLess(k("1.0.0-alpha.1"), k("1.0.0-beta"))
+        self.assertLess(k("0.9.9"), k("1.0.0-rc.1"))
+        self.assertEqual(k("1.0"), k("1.0.0"))
+        self.assertEqual(k("1.0.0+build5"), k("1.0.0"))
+        self.assertLess(k(""), k("0.0.1"))
+
+    def test_updates_follow_prerelease_order(self):
+        keys = lambda todo: [c["key"] for c in todo]
+        rc = {"engine": "v1.0.0-rc.1", "frame": "v1.0.0-rc.1"}
+        self.assertEqual(keys(ei.components_to_update(rc, "v1.0.0", if_newer=True)), ["engine", "frame"])
+        final = {"engine": "v1.0.0", "frame": "v1.0.0"}
+        self.assertEqual(ei.components_to_update(final, "v1.0.0-rc.2", if_newer=True), [])
+
     def test_version_of_and_asset_names(self):
         self.assertEqual(ei.version_of("v0.1.0"), "0.1.0")
         self.assertEqual(ei.version_of("0.1.0-frame.1"), "0.1.0-frame.1")
@@ -276,7 +296,8 @@ class FlowTests(unittest.TestCase):
         for c, label in zip(comps, ("engine", "frame")):
             arc = os.path.join(self.tmp, f"{label}.tar.gz")
             make_tar(arc, c["top"], {"payload": (label.encode() + b" 1.2.0", 0o644),
-                                     "tether": (b"x", 0o755)})
+                                     "tether": (b"x", 0o755),
+                                     "earshot-system-setup.py": (b"# setup " + label.encode(), 0o644)})
             with open(arc, "rb") as f:
                 data = f.read()
             url = f"https://github.com/{c['repo']}/releases/download/{self.TAG}/{ei.asset_name(c, self.TAG)}"
@@ -329,6 +350,25 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(ei.read_versions(), {"engine": self.TAG, "frame": self.TAG})
         self.assertEqual(self._status()["state"], "updated")
         self.assertEqual([n for n in os.listdir(self.data) if n.startswith(".stage") or n.endswith(".old")], [])
+        # the root setup script's hash is recorded from the signature-checked release
+        frame = os.path.join(self.data, "frame")
+        with open(os.path.join(frame, "earshot-system-setup.py"), "rb") as f:
+            want = hashlib.sha256(f.read()).hexdigest()
+        with open(os.path.join(frame, "earshot-system-setup.py.sha256")) as f:
+            self.assertEqual(f.read(), want + "\n")
+
+    def test_release_without_the_setup_script_is_refused(self):
+        arc = os.path.join(self.tmp, "bare.tar.gz")
+        frame = ei.COMPONENTS[1]
+        make_tar(arc, frame["top"], {"payload": (b"x", 0o644)})
+        url = f"https://github.com/{frame['repo']}/releases/download/{self.TAG}/{ei.asset_name(frame, self.TAG)}"
+        with open(arc, "rb") as f:
+            data = f.read()
+        self.net[url] = data
+        self.net[url + ".sig"] = base64.b64encode(sign(SEED, data)[1])
+        with mock.patch.object(ei, "run_install_sh", lambda: None), self.assertRaises(ei.InstallError):
+            self._run()
+        self.assertFalse(os.path.exists(os.path.join(self.data, "frame")))
 
     def test_failed_update_keeps_the_old_install(self):
         with mock.patch.object(ei, "run_install_sh", lambda: None):
@@ -408,6 +448,97 @@ class StatusTests(unittest.TestCase):
             s.set("failed", "boom")
             self.assertTrue(os.path.exists(quiet))
             ei.Status(None).set("failed", "no path: no crash")
+
+
+class UninstallTests(unittest.TestCase):
+    """uninstall(): the setup scripts are kept until the system setup has been undone."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.data = os.path.join(self.tmp, "earshot")
+        os.makedirs(os.path.join(self.data, "frame"))
+        for n in ("uninstall.sh", "earshot-system-setup.sh"):
+            open(os.path.join(self.data, "frame", n), "w").close()
+        self.manifest = os.path.join(self.tmp, "manifest.json")
+        self.calls = []
+        self.undo_rc = 0
+        self.undo_removes_manifest = True
+        for p in (mock.patch.object(ei, "DATA_DIR", self.data),
+                  mock.patch.object(ei, "SYSTEM_MANIFEST", self.manifest),
+                  mock.patch.object(ei.subprocess, "run", self._run)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _run(self, cmd, **kw):
+        self.calls.append(list(cmd))
+        if cmd[-1] == "--undo" and self.undo_rc == 0 and self.undo_removes_manifest:
+            os.remove(self.manifest)
+        return mock.Mock(returncode=self.undo_rc if cmd[-1] == "--undo" else 0)
+
+    def _uninstall(self, answer="y", tty=True, purge=False):
+        with mock.patch("sys.stdout", new=io.StringIO()) as out, \
+                mock.patch.object(ei.sys.stdin, "isatty", lambda: tty), \
+                mock.patch("builtins.input", lambda prompt="": answer):
+            ei.uninstall(mock.Mock(purge=purge))
+        return out.getvalue()
+
+    def _uninstall_sh(self):
+        return [c for c in self.calls if c[1].endswith("uninstall.sh")][0]
+
+    def _make_manifest(self):
+        with open(self.manifest, "w") as f:
+            f.write("{}")
+
+    def test_no_manifest_removes_everything(self):
+        self._uninstall()
+        self.assertNotIn("--keep-setup", self._uninstall_sh())
+
+    def test_undo_succeeded_removes_everything(self):
+        self._make_manifest()
+        out = self._uninstall("y")
+        self.assertIn("--undo", [c[-1] for c in self.calls])
+        self.assertNotIn("--keep-setup", self._uninstall_sh())
+        self.assertNotIn("still in place", out)
+
+    def test_declined_undo_keeps_the_setup_scripts_and_says_how(self):
+        self._make_manifest()
+        out = self._uninstall("n")
+        self.assertNotIn("--undo", [c[-1] for c in self.calls])
+        self.assertIn("--keep-setup", self._uninstall_sh())
+        self.assertIn("earshot-system-setup.sh --undo", out)
+
+    def test_failed_undo_keeps_the_setup_scripts(self):
+        self._make_manifest()
+        self.undo_rc = 126
+        self._uninstall("y")
+        self.assertIn("--keep-setup", self._uninstall_sh())
+
+    def test_undo_that_leaves_the_manifest_keeps_the_setup_scripts(self):
+        self._make_manifest()
+        self.undo_removes_manifest = False
+        self._uninstall("y")
+        self.assertIn("--keep-setup", self._uninstall_sh())
+
+    def test_no_terminal_keeps_the_setup_scripts(self):
+        self._make_manifest()
+        self._uninstall("y", tty=False)
+        self.assertIn("--keep-setup", self._uninstall_sh())
+
+    def test_purge_is_passed_through(self):
+        self._uninstall(purge=True)
+        self.assertIn("--purge", self._uninstall_sh())
+
+    def test_a_later_uninstall_after_the_undo_clears_the_kept_scripts(self):
+        os.remove(os.path.join(self.data, "frame", "uninstall.sh"))
+        self._uninstall()
+        self.assertFalse(os.path.exists(self.data))
+
+    def test_other_files_are_never_cleared_as_kept_scripts(self):
+        os.remove(os.path.join(self.data, "frame", "uninstall.sh"))
+        open(os.path.join(self.data, "frame", "earshot-steamui.py"), "w").close()
+        self._uninstall()
+        self.assertTrue(os.path.exists(os.path.join(self.data, "frame", "earshot-steamui.py")))
 
 
 class CommandLineTests(unittest.TestCase):

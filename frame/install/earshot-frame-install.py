@@ -301,15 +301,27 @@ def write_versions(versions):
 
 
 def version_key(tag):
-    """Numbers in a tag, for ordering: 0.3.5-frame.7 -> (0, 3, 5, 7)."""
-    out, num = [], ""
-    for ch in (tag or "") + " ":
-        if ch.isdigit():
-            num += ch
-        elif num:
-            out.append(int(num))
-            num = ""
-    return tuple(out)
+    """A sortable key for a release tag, following semantic versioning: the numbers before
+    any "-" decide first; at the same numbers a pre-release (1.0.0-rc.1, 0.3.5-frame.7)
+    sorts before the release (1.0.0), and its dot-separated parts compare as numbers when
+    they are numbers (rc.2 < rc.10). An empty or missing tag is () and sorts lowest."""
+    text = (tag or "").strip()
+    if not text:
+        return ()
+    if text[:1] in ("v", "V") and text[1:2].isdigit():
+        text = text[1:]
+    text = text.split("+", 1)[0]
+    core, _, pre = text.partition("-")
+    nums = []
+    for part in core.split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        nums.append(int(digits) if digits else 0)
+    while nums and nums[-1] == 0:
+        nums.pop()
+    if not pre:
+        return (tuple(nums), 1)
+    ids = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.replace("-", ".").split(".") if p)
+    return (tuple(nums), 0, ids)
 
 
 def components_to_update(installed, tag, if_newer):
@@ -415,7 +427,26 @@ def download_component(component, workdir, tag):
         f.write(data)
     root = safe_extract(archive, workdir, component["top"])
     os.remove(archive)
+    if component["key"] == "frame":
+        record_setup_hash(root)
     return root
+
+
+SETUP_PY = "earshot-system-setup.py"
+
+
+def record_setup_hash(frame_root):
+    """Write the sha256 of the root setup script, as it came out of the signature-checked
+    release, beside it. earshot-system-setup.sh checks the script against this before it runs
+    anything as root."""
+    path = os.path.join(frame_root, SETUP_PY)
+    try:
+        with open(path, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        raise InstallError(f"{SETUP_PY} is missing from the release") from None
+    with open(path + ".sha256", "w", encoding="ascii") as f:
+        f.write(digest + "\n")
 
 
 def health_check(engine_dir):
@@ -521,21 +552,40 @@ def offer_system_setup():
     subprocess.run(["sh", script], env=clean_env())
 
 
+def remove_kept_setup():
+    """An earlier uninstall kept the setup scripts for the system undo; it is done now."""
+    frame = os.path.join(DATA_DIR, "frame")
+    if os.path.isdir(frame) and all(n.startswith("earshot-system-setup.") for n in os.listdir(frame)):
+        shutil.rmtree(frame, ignore_errors=True)
+        try:
+            os.rmdir(DATA_DIR)
+        except OSError:
+            pass
+
+
 def uninstall(args):
     script = os.path.join(DATA_DIR, "frame", "uninstall.sh")
-    if os.path.isfile(SYSTEM_MANIFEST) and os.path.isfile(system_setup_script()) and sys.stdin.isatty():
+    undone = not os.path.isfile(SYSTEM_MANIFEST)  # nothing to undo
+    if not undone and os.path.isfile(system_setup_script()) and sys.stdin.isatty():
         answer = input("Also undo the Bluetooth system setup Earshot made (needs your password)? [y/N] ")
         if answer.strip().lower() in ("y", "yes"):
-            subprocess.run(["sh", system_setup_script(), "--undo"], env=clean_env())
+            r = subprocess.run(["sh", system_setup_script(), "--undo"], env=clean_env())
+            undone = r.returncode == 0 and not os.path.isfile(SYSTEM_MANIFEST)
     if not os.path.isfile(script):
         print("Earshot is not installed.")
+        if undone:
+            remove_kept_setup()
     else:
-        cmd = ["sh", script] + (["--purge"] if args.purge else [])
+        # The setup scripts are the only way to undo the system setup: keep them until it is undone.
+        cmd = ["sh", script] + (["--purge"] if args.purge else []) + ([] if undone else ["--keep-setup"])
         r = subprocess.run(cmd, env=clean_env())
         if r.returncode != 0:
             raise InstallError(f"removing Earshot failed (exit {r.returncode})")
-    if os.path.isfile(SYSTEM_MANIFEST):
-        print("The Bluetooth system setup is still in place; run this again and answer y to undo it.")
+    if not undone:
+        print("The Bluetooth system setup is still in place, so its scripts were kept in")
+        print("  ~/.local/share/earshot/frame/")
+        print("To undo it later:  sh ~/.local/share/earshot/frame/earshot-system-setup.sh --undo")
+        print("then remove that folder (rm -rf ~/.local/share/earshot), or run this uninstall again and answer y.")
     print("Done.")
 
 
