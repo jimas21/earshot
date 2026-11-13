@@ -1118,3 +1118,97 @@ TEST(PhoneAudio, ChoiceSurvivesTheConfigFile) {
     EXPECT_EQ(deserialize_config(serialize_config(config)).phone_audio, PhoneAudio::Phone);
     EXPECT_EQ(deserialize_config("{}").phone_audio, PhoneAudio::Auto);
 }
+
+// No-root mode: a stock bluetoothd with nothing in /etc changed. Nothing may be reported as a step that needs
+// administrator rights, and the bond's LE half is read from Device1.
+TEST(Capability, NoRootModeOffersNoSetupStepsAndStaysFull) {
+    std::string adapter = ADAPTER_FULL;
+    adapter.replace(adapter.find("8127496"), 7, "0");
+    Payload p(join(adapter.c_str(), R"({
+      '/org/bluez/hci0/dev_02_00_00_00_00_01': {
+        'org.bluez.Device1': { 'Paired': <true>, 'Bonded': <true> },
+        'org.bluez.Bearer.LE1': {}
+      }
+    })")
+                  .c_str());
+    auto objects = parse_managed_objects(p.v);
+    objects.experimental_api = false;
+
+    const auto upstream = resolve_capability(objects, std::nullopt, {}, true, false);
+    EXPECT_FALSE(upstream.setup.empty());
+    EXPECT_EQ(upstream.mode, DeliveryMode::Compatibility);
+
+    const auto cap = resolve_capability(objects, std::nullopt, {}, true, true);
+    EXPECT_TRUE(cap.no_root);
+    EXPECT_TRUE(cap.setup.empty());
+    EXPECT_EQ(cap.mode, DeliveryMode::Full);
+    EXPECT_FALSE(cap.class_ok);
+    EXPECT_TRUE(cap.ertm_disabled);
+    // class and ERTM are explained, never prescribed
+    EXPECT_GE(cap.reasons.size(), 2u);
+    for (const auto& reason : cap.reasons) {
+        EXPECT_EQ(reason.find("sudo"), std::string::npos) << reason;
+        EXPECT_EQ(reason.find("btmgmt"), std::string::npos) << reason;
+    }
+}
+
+TEST(Capability, NoRootModeReadsTheLeHalfFromTheOfferedAncsService) {
+    Payload p(join(ADAPTER_FULL, R"({
+      '/org/bluez/hci0/dev_02_00_00_00_00_01': {
+        'org.bluez.Device1': {
+          'Alias': <'iPhone'>,
+          'Paired': <true>,
+          'Bonded': <true>,
+          'UUIDs': <['7905f431-b5ce-4e99-a40f-4b1e122d00d0']>,
+          'Modalias': <'bluetooth:v004Cp200Ed0100'>
+        },
+        'org.bluez.Bearer.LE1': {}
+      }
+    })")
+                  .c_str());
+    auto objects = parse_managed_objects(p.v);
+    objects.experimental_api = false;
+    ASSERT_FALSE(objects.devices.empty());
+    EXPECT_FALSE(objects.devices[0].has_le_bearer);
+    EXPECT_TRUE(objects.devices[0].ancs_bond());
+
+    EXPECT_FALSE(resolve_capability(objects).bond_has_le);
+    EXPECT_TRUE(resolve_capability(objects, std::nullopt, {}, false, true).bond_has_le);
+}
+
+TEST(Capability, NoRootModeTellsAPairedPhoneThatOffersNothingYet) {
+    Payload p(join(ADAPTER_FULL, R"({
+      '/org/bluez/hci0/dev_02_00_00_00_00_01': {
+        'org.bluez.Device1': {
+          'Alias': <'iPhone'>,
+          'Paired': <true>,
+          'Bonded': <true>,
+          'UUIDs': <['00001132-0000-1000-8000-00805f9b34fb', '0000112f-0000-1000-8000-00805f9b34fb']>,
+          'Modalias': <'bluetooth:v004Cp200Ed0100'>
+        }
+      }
+    })")
+                  .c_str());
+    auto objects = parse_managed_objects(p.v);
+    objects.experimental_api = false;
+    const auto cap = resolve_capability(objects, std::nullopt, {}, false, true);
+    EXPECT_FALSE(cap.bond_has_le);
+    EXPECT_TRUE(cap.setup.empty());
+    bool named = false;
+    for (const auto& reason : cap.reasons)
+        named = named || reason.find("not offered notifications") != std::string::npos;
+    EXPECT_TRUE(named);
+}
+
+TEST(NoRootMode, ComesFromTheEnvironment) {
+    {
+        tether::testing::ScopedEnv env("TETHER_NO_ROOT", std::string("1"));
+        EXPECT_TRUE(no_root_mode());
+    }
+    {
+        tether::testing::ScopedEnv env("TETHER_NO_ROOT", std::string("0"));
+        EXPECT_FALSE(no_root_mode());
+    }
+    unsetenv("TETHER_NO_ROOT");
+    EXPECT_FALSE(no_root_mode());
+}

@@ -1,3 +1,4 @@
+#include "scoped_env.hpp"
 #include <csignal>
 #include <gtest/gtest.h>
 #include <sys/wait.h>
@@ -69,6 +70,18 @@ TEST(AgentPolicy, FollowsARecreatedDeviceObject) {
     EXPECT_TRUE(agent.accepts_device_path("/org/bluez/hci0/dev_new"));
 }
 
+// An agent with no device waits for the phone: nothing is accepted until a pairing request picks one.
+TEST(AgentPolicy, AListeningAgentServesNoDeviceUntilOneIsChosen) {
+    PairingAgent agent(nullptr, "", {});
+    EXPECT_TRUE(agent.device_path().empty());
+    EXPECT_FALSE(agent.accepts_device_path("/org/bluez/hci0/dev_any"));
+
+    agent.set_device_path("/org/bluez/hci0/dev_phone");
+    EXPECT_EQ(agent.device_path(), "/org/bluez/hci0/dev_phone");
+    EXPECT_TRUE(agent.accepts_device_path("/org/bluez/hci0/dev_phone"));
+    EXPECT_FALSE(agent.accepts_device_path("/org/bluez/hci0/dev_other"));
+}
+
 // iOS renders the comparison with leading zeros. Dropping them shows the user a
 // code that does not match their phone, which reads as a failed pairing.
 TEST(Passkey, FormatsSixDigitsWithLeadingZeros) {
@@ -119,6 +132,26 @@ TEST(BluetoothConfig, DefaultsToConnectFirstAndAncsEnabled) {
     EXPECT_FALSE(config.lock_on_away);
     EXPECT_EQ(config.lock_away_seconds, AWAY_LOCK_GRACE_SECONDS);
     EXPECT_TRUE(config.lock_command.empty());
+}
+
+// No-root mode turns call control on (it reads PipeWire's telephony) unless told not to.
+TEST(BluetoothConfig, NoRootModeDefaultsCallsOnAndCanBeOptedOut) {
+    EXPECT_FALSE(default_config().calls_enabled);
+    {
+        tether::testing::ScopedEnv root("TETHER_NO_ROOT", std::string("1"));
+        EXPECT_TRUE(default_config().calls_enabled);
+        EXPECT_TRUE(deserialize_config("{}").calls_enabled);
+        // a saved choice always wins
+        EXPECT_FALSE(deserialize_config("{\"calls_enabled\": false}").calls_enabled);
+        tether::testing::ScopedEnv off("TETHER_CALLS", std::string("0"));
+        EXPECT_FALSE(default_config().calls_enabled);
+    }
+}
+
+TEST(BluetoothConfig, RetentionDefaultComesFromTheEnvironmentUntilSaved) {
+    tether::testing::ScopedEnv env("TETHER_RETENTION", std::string("none"));
+    EXPECT_EQ(deserialize_config("{}").retention, tether::Retention::None);
+    EXPECT_EQ(deserialize_config("{\"retention\": \"encrypted\"}").retention, tether::Retention::Encrypted);
 }
 
 // A zero or negative grace would lock on the first flap.

@@ -1064,8 +1064,8 @@ namespace tether::bluetooth {
                     const Device* candidate = target.empty() ? nullptr : objects.find_device(target);
                     if (!candidate) {
                         for (const auto& d : objects.devices) {
-                            if (d.connected && !d.paired && !was_connected.count(normalize_address(d.address)) &&
-                                d.looks_like_iphone()) {
+                            // An unpaired phone shows no services yet, so a new connection is all there is to go on
+                            if (d.connected && !d.paired && !was_connected.count(normalize_address(d.address))) {
                                 candidate = &d;
                                 break;
                             }
