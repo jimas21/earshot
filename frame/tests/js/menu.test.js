@@ -248,6 +248,22 @@ test('update progress is shown and disables the check button', () => {
   assert.match(btn.textContent, /Updating Earshot/);
 });
 
+test('settings say when the call link is being restored or did not come back', () => {
+  const p = openPopup();
+  const s = withState({});
+  s.phone = Object.assign({}, s.phone, { calls: false, calls_restore: 'pending' });
+  p.w.__earshotMenu.setState(s);
+  click(p, byAct(p, 'tab', 'settings'));
+  assert.match(text(p), /Calls: reconnecting/);
+  s.phone = Object.assign({}, s.phone, { calls_restore: 'unverified' });
+  p.w.__earshotMenu.setState(s);
+  assert.match(text(p), /did not come back/);
+  s.phone = Object.assign({}, s.phone, { calls: true, calls_restore: '' });
+  p.w.__earshotMenu.setState(s);
+  assert.match(text(p), /Calls: connected/);
+  assert.doesNotMatch(text(p), /did not come back/);
+});
+
 test('tab choice survives in browser storage; unavailable storage does not break it', () => {
   const p = openPopup();
   p.w.__earshotMenu.setState(BASE);

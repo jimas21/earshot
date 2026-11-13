@@ -323,7 +323,8 @@
       '<div class="es-note">On means no pop-up. The app still shows under Alerts.</div>'
       : '<div class="es-note">Apps that send notifications will be listed here.</div>';
     h += '<div class="es-h">Phone</div><div class="es-note" style="font-size:12px;line-height:1.7">' +
-      `Messages: ${p.messages ? 'connected' : 'not connected'}<br>Notifications: ${p.notifications ? 'connected' : (p.ancs_reason ? esc(p.ancs_reason) : 'not connected')}<br>Calls: ${p.calls ? 'connected' : 'not connected'}` +
+      `Messages: ${p.messages ? 'connected' : 'not connected'}<br>Notifications: ${p.notifications ? 'connected' : (p.ancs_reason ? esc(p.ancs_reason) : 'not connected')}<br>Calls: ${p.calls ? 'connected' : p.calls_restore === 'pending' ? 'reconnecting...' : 'not connected'}` +
+      (p.calls_restore === 'unverified' ? '<br>The call link did not come back after the headset took it back. Turn Bluetooth off and on again on the iPhone.' : '') +
       (p.profile_reason ? `<br>${esc(p.profile_reason)}` : '') + '</div>';
     const u = updateText(S.update);
     const versions = (S.update && S.update.versions) || {};

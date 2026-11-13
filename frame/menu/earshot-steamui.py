@@ -53,7 +53,10 @@ PAGE_MARKS = ("vrOverlayKey=valve.steam.gamepadui.bar",)  # the bar and barpopup
 MENU_FILE = os.path.join(HERE, "earshot-menu.js")
 BINDING = "earshotAction"
 VRCMD = "/opt/steamvr/bin/linuxarm64/vrcmd"
-HFP_AG_UUID = "0000111f"  # what the iPhone advertises; BlueZ's hands-free unit connects to this
+HFP_AG_UUID = "0000111f-0000-1000-8000-00805f9b34fb"  # what the iPhone advertises; BlueZ matches the full UUID
+BREDR_BEARER = "org.bluez.Bearer.BREDR1"
+HFP_VERIFY_SECONDS = 45.0   # how long to wait for the call link to come back after a restore
+AUTO_UPDATE_DEFER = 5 * 60  # try an automatic update again this soon after a call ends
 ANCS_CATEGORY_INCOMING_CALL = 1
 MAP_APP_ID = "com.apple.MobileSMS"  # Tether leaves ANCS "Messages" alone: MAP carries those
 
@@ -913,6 +916,7 @@ class Helper:
         self.scan = scan
         self.auto_update_first = auto_update_first
         self.hfp_retry_after = 30.0
+        self.hfp_verify_seconds = HFP_VERIFY_SECONDS
 
         # what the engine told us
         self.engine_up = False
@@ -940,6 +944,9 @@ class Helper:
         self.worn = None
         self.detector = None
         self.hfp_released = None
+        self.restore_needs_drop = False
+        self.hfp_restore = None   # None, "pending" (asked the phone to reconnect), "unverified" (it did not come back)
+        self.hfp_verify = None
         self.hfp_busy = False
         self.hfp_retry = None
         self.hfp_block = None     # (until, wanted method) after a failed attempt
@@ -1017,6 +1024,7 @@ class Helper:
             self.bt_status = {}
             self.calls = []
             self.hfp_released = None
+            self.set_restore(None)
             self.last_classic = False
         self.dirty()
 
@@ -1063,6 +1071,11 @@ class Helper:
             self.ancs_ready_at = self.loop.clock()
             self.request("bt_list_notifications")
         calls = msg.get("calls")
+        if not classic:
+            self.restore_needs_drop = False   # the bearer did drop: what comes next is a new link
+        if isinstance(calls, dict) and calls.get("available") and self.hfp_restore and not self.restore_needs_drop:
+            log.info("hfp: the call link is back")
+            self.set_restore(None)
         if isinstance(calls, dict) and calls.get("available") and not (before.get("calls") or {}).get("available"):
             self.request("bt_list_calls")
             self.request("bt_list_call_history")
@@ -1141,7 +1154,7 @@ class Helper:
             self.notifications.popitem(last=False)
         settling = (self.ancs_ready_at is not None
                     and self.loop.clock() - self.ancs_ready_at < self.settle_seconds)
-        if is_new and not settling and not msg.get("pre_existing"):
+        if is_new and not settling and not msg.get("pre_existing") and not msg.get("silent"):
             self.toast_notification(msg)
         self.dirty()
 
@@ -1252,31 +1265,63 @@ class Helper:
             if self.hfp_released == path or not dev.get("connected", dev.get("classic_connected", True)):
                 return
         elif self.hfp_released == path:
-            method = "ConnectProfile"
+            method = "RestoreLink"
         else:
             return
         block = self.hfp_block
         if block and block[1] == method and self.loop.clock() < block[0]:
             return  # it just failed; the retry timer tries again
-        self.hfp_call(method, path, released=path if method == "DisconnectProfile" else None)
+        self.hfp_call(method, path)
 
-    def hfp_call(self, method, path, released):
+    def set_restore(self, state):
+        """None, "pending" or "unverified"; pending ends when the call link is seen again."""
+        self.loop.cancel(self.hfp_verify)
+        self.hfp_verify = None
+        if state != self.hfp_restore:
+            self.hfp_restore = state
+            self.dirty()
+
+    def restore_unverified(self):
+        self.hfp_verify = None
+        if self.hfp_restore == "pending":
+            log.warning("hfp: the call link did not come back after the restore")
+            self.set_restore("unverified")
+
+    def hfp_call(self, method, path):
+        """Let go of the call link (DisconnectProfile), or take it back. BlueZ does not
+        reconnect hands-free on an existing link: ConnectProfile returns success and does
+        nothing (docs/BLUETOOTH.md, "Hands-free after a phone-initiated reconnect"). What
+        works is dropping the BR/EDR bearer, so the phone reconnects with hands-free. A
+        restore is therefore only "pending" until the call link is seen again."""
         self.hfp_busy = True
         self.loop.cancel(self.hfp_retry)
+        restore = method == "RestoreLink"
 
         def done(rc, out, err):
             self.hfp_busy = False
             if rc == 0:
-                self.hfp_released = released
                 self.hfp_block = None
+                if restore:
+                    self.hfp_released = None
+                    self.set_restore("pending")
+                    # An "available" seen before the bearer drops is the old link, not the restore.
+                    calls = self.conn.get("calls")
+                    self.restore_needs_drop = bool(isinstance(calls, dict) and calls.get("available"))
+                    self.hfp_verify = self.loop.call_later(self.hfp_verify_seconds, self.restore_unverified)
+                else:
+                    self.hfp_released = path
+                    self.set_restore(None)
                 log.info("hfp: %s ok", method)
             else:
                 log.warning("hfp: %s failed (rc %s)", method, rc)
                 self.hfp_block = (self.loop.clock() + self.hfp_retry_after, method)
                 self.hfp_retry = self.loop.call_later(self.hfp_retry_after, self.enforce_hfp)
 
-        self.exec.run(["busctl", "--system", "call", "org.bluez", path, "org.bluez.Device1", method, "s", HFP_AG_UUID],
-                      done, timeout=15)
+        if restore:
+            cmd = ["busctl", "--system", "call", "org.bluez", path, BREDR_BEARER, "Disconnect"]
+        else:
+            cmd = ["busctl", "--system", "call", "org.bluez", path, "org.bluez.Device1", method, "s", HFP_AG_UUID]
+        self.exec.run(cmd, done, timeout=15)
 
     # ----- SteamVR notifications -----
 
@@ -1485,6 +1530,12 @@ class Helper:
                                   "time": data.get("time") if isinstance(data.get("time"), int) else 0}
             self.dirty()
 
+    def call_in_progress(self):
+        """A call is active, held or ringing (hands-free), or the phone shows an incoming call."""
+        if self.calls:
+            return True
+        return any(n.get("category") == ANCS_CATEGORY_INCOMING_CALL for n in self.notifications.values())
+
     def installed_versions(self):
         try:
             with open(self.versions_file, "r", encoding="utf-8") as f:
@@ -1500,9 +1551,14 @@ class Helper:
         self.read_update_status()
         now = self.loop.clock()
         if self.settings.get("auto_update") and self.next_auto_update is not None and now >= self.next_auto_update:
-            self.next_auto_update = now + AUTO_UPDATE_EVERY
-            log.info("automatic update check")
-            self.start_update()
+            if self.call_in_progress():
+                # The update restarts this service and the engine: never in the middle of a call.
+                self.next_auto_update = now + AUTO_UPDATE_DEFER
+                log.info("automatic update check postponed: a call is active")
+            else:
+                self.next_auto_update = now + AUTO_UPDATE_EVERY
+                log.info("automatic update check")
+                self.start_update()
         busy = bool(self.update_status and self.update_status.get("state") in ("checking", "updating"))
         self.update_timer = self.loop.call_later(3.0 if busy else 30.0, self.tick_update)
 
@@ -1579,6 +1635,7 @@ class Helper:
             "messages": bool(self.conn.get("map_open")),
             "notifications": bool(self.conn.get("ancs_ready")),
             "calls": bool(calls.get("available")),
+            "calls_restore": self.hfp_restore or "",
             "reason": trim(self.conn.get("link_reason") or "", 200),
             "profile_reason": trim(self.conn.get("profile_reason") or "", 200),
             "ancs_reason": trim(self.conn.get("ancs_reason") or "", 200),

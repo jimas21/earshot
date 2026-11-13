@@ -207,7 +207,7 @@ class PriorityTests(unittest.TestCase):
         self.assertEqual(rig.busctl_methods(), ["DisconnectProfile"])
         call = rig.spawn.of("busctl")[0]
         self.assertEqual(call[:6], ["busctl", "--system", "call", "org.bluez", DEV_PATH, "org.bluez.Device1"])
-        self.assertEqual(call[7:], ["s", "0000111f"])
+        self.assertEqual(call[7:], ["s", "0000111f-0000-1000-8000-00805f9b34fb"])   # the full UUID
         rig.tether.push(notif(2))
         self.assertTrue(rig.pump(lambda: any(n["uid"] == 2 for n in (rig.state() or {}).get("notifications", [])), 2))
         self.assertEqual(rig.vrcmd_texts(), [])
@@ -221,7 +221,49 @@ class PriorityTests(unittest.TestCase):
         self.assertEqual(rig.busctl_methods(), ["DisconnectProfile"])
         rig.worn[0] = True
         rig.helper.poll_presence()
-        self.assertEqual(rig.busctl_methods(), ["DisconnectProfile", "ConnectProfile"])
+        # ConnectProfile does nothing on a live link: the restore drops the BR/EDR bearer instead
+        self.assertEqual(rig.busctl_methods(), ["DisconnectProfile", "Disconnect"])
+        restore = rig.spawn.of("busctl")[1]
+        self.assertEqual(restore[4:7], [DEV_PATH, "org.bluez.Bearer.BREDR1", "Disconnect"])
+        self.assertEqual(len(restore), 7)
+        self.assertNotIn("ConnectProfile", rig.busctl_methods())
+
+    def test_restore_is_pending_until_the_call_link_is_seen_again(self):
+        rig = Rig(self, worn=False)
+        rig.tether.on_subscribe[-1] = dict(CONNECTED, calls={"available": False, "audio": "", "reason": ""})
+        rig.start()
+        rig.worn[0] = True
+        rig.helper.poll_presence()
+        self.assertTrue(rig.pump(lambda: rig.state()["phone"]["calls_restore"] == "pending", 2))
+        self.assertIsNone(rig.helper.hfp_released)          # not "restored": nothing proves it yet
+        rig.tether.push(dict(CONNECTED, classic_connected=False, calls={"available": False}))
+        rig.tether.push(CONNECTED)                           # the phone reconnected with hands-free
+        self.assertTrue(rig.pump(lambda: rig.state()["phone"]["calls_restore"] == "", 2))
+        self.assertTrue(rig.state()["phone"]["calls"])
+
+    def test_restore_that_never_comes_back_is_reported(self):
+        rig = Rig(self, worn=False)
+        rig.helper.hfp_verify_seconds = 0.2
+        rig.tether.on_subscribe[-1] = dict(CONNECTED, calls={"available": False, "audio": "", "reason": ""})
+        rig.start()
+        rig.worn[0] = True
+        rig.helper.poll_presence()
+        self.assertTrue(rig.pump(lambda: rig.state()["phone"]["calls_restore"] == "unverified", 3))
+        # a late recovery still clears it
+        rig.tether.push(CONNECTED)
+        self.assertTrue(rig.pump(lambda: rig.state()["phone"]["calls_restore"] == "", 2))
+
+    def test_failed_restore_is_not_marked_and_is_retried(self):
+        rig = Rig(self, worn=False)
+        rig.helper.hfp_retry_after = 0.3
+        rig.start()
+        rig.spawn.results["busctl"] = (1, "", "boom")
+        rig.worn[0] = True
+        rig.helper.poll_presence()
+        self.assertTrue(rig.pump(lambda: rig.busctl_methods().count("Disconnect") == 1, 2))
+        self.assertEqual(rig.helper.hfp_restore, None)
+        self.assertEqual(rig.helper.hfp_released, DEV_PATH)   # still released: the restore is owed
+        self.assertTrue(rig.pump(lambda: rig.busctl_methods().count("Disconnect") == 2, 2))
 
     def test_release_is_not_repeated(self):
         rig = Rig(self, worn=False)
@@ -265,7 +307,7 @@ class PriorityTests(unittest.TestCase):
         rig = Rig(self, worn=False)
         rig.start()
         rig.action(type="set_setting", key="priority", value="frame")
-        self.assertTrue(rig.pump(lambda: rig.busctl_methods() == ["DisconnectProfile", "ConnectProfile"], 2))
+        self.assertTrue(rig.pump(lambda: rig.busctl_methods() == ["DisconnectProfile", "Disconnect"], 2))
         rig.tether.push(notif(4))
         self.assertTrue(rig.pump(lambda: rig.vrcmd_texts(), 2))
         self.assertTrue(rig.pump(lambda: rig.state()["priority"]["frame_active"], 2))
@@ -365,6 +407,15 @@ class FilterTests(unittest.TestCase):
         self.assertEqual([a for a in st["apps"] if a["id"] == "com.example.noisy"][0]["muted"], True)
         rig.action(type="mute", app_id="com.example.noisy", muted=False)
         self.assertTrue(rig.pump(lambda: rig.helper.settings.get("muted_apps") == [], 2))
+
+    def test_silent_notification_is_listed_but_does_not_toast(self):
+        rig = Rig(self)
+        rig.start()
+        rig.tether.push(notif(32, silent=True))
+        self.assertTrue(rig.pump(lambda: any(n["uid"] == 32 for n in (rig.state() or {}).get("notifications", [])), 2))
+        rig.tether.push(notif(33))
+        self.assertTrue(rig.pump(lambda: len(rig.vrcmd_texts()) == 1, 2))
+        self.assertEqual(len(rig.vrcmd_texts()), 1)     # only the one that was not silent
 
     def test_alerts_off_and_preview_off(self):
         rig = Rig(self)
@@ -514,6 +565,25 @@ class CallTests(unittest.TestCase):
         self.assertEqual(len(rig.vrcmd_texts()), 1)
         rig.tether.push({"command": "bt_calls", "calls": []})
         self.assertTrue(rig.pump(lambda: rig.state()["calls"]["incoming"] is None, 2))
+
+    def test_automatic_update_waits_for_the_call_to_end(self):
+        rig = Rig(self)
+        with open(rig.updater, "w") as f:
+            f.write("# fake installer")
+        rig.start()
+        rig.tether.push(self.RINGING)
+        self.assertTrue(rig.pump(lambda: rig.state()["calls"]["incoming"], 2))
+        h = rig.helper
+        h.next_auto_update = h.loop.clock() - 1
+        h.tick_update()
+        rig.settle_for(0.1)
+        self.assertEqual(rig.spawn.of("systemd-run"), [])
+        self.assertLess(h.next_auto_update - h.loop.clock(), 10 * 60)    # soon again, not in 6 hours
+        rig.tether.push({"command": "bt_calls", "calls": []})
+        self.assertTrue(rig.pump(lambda: rig.state()["calls"]["incoming"] is None, 2))
+        h.next_auto_update = h.loop.clock() - 1
+        h.tick_update()
+        self.assertTrue(rig.pump(lambda: rig.spawn.of("systemd-run"), 2))
 
     def test_no_call_toast_when_the_phone_has_priority(self):
         rig = Rig(self, worn=False)
