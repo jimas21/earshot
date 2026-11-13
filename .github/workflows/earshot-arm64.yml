@@ -49,9 +49,16 @@ jobs:
           persist-credentials: false
       - id: v
         run: |
-          base="$(sed -n 's/^project(tether VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
-          test -n "${base}"
-          echo "ver=${base}-frame.${GITHUB_RUN_NUMBER}" >> "${GITHUB_OUTPUT}"
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            # a release: the version is the tag (without a leading v), which is what the
+            # installer derives the asset names from
+            ver="${GITHUB_REF_NAME#v}"
+          else
+            base="$(sed -n 's/^project(tether VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+            test -n "${base}"
+            ver="${base}-frame.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "ver=${ver}" >> "${GITHUB_OUTPUT}"
 
   # Tests and the Frame package: the installer, units, system setup and the Phone tab.
   frame:
