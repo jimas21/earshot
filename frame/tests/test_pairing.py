@@ -180,7 +180,7 @@ class ListenRouteTests(unittest.TestCase):
 
     def test_cancel_at_the_code_declines_and_closes(self):
         rig, fake = pair_rig(self)
-        v = to_confirm(self, rig, fake)
+        to_confirm(self, rig, fake)
         rig.action(type="pair_close")
         self.assertTrue(rig.pump(lambda: fake.commands("confirm"), 2))
         self.assertEqual(fake.commands("confirm")[0][2], False)
@@ -196,7 +196,7 @@ class ListenRouteTests(unittest.TestCase):
         rig.settle_for(0.2)
         self.assertEqual(len(fake.commands("listen")), 1)
         fake.listen_expires()
-        v = wait_phase(self, rig, "listen")
+        wait_phase(self, rig, "listen")
         self.assertTrue(rig.pump(lambda: pair_view(rig)["expired"], 2))
         rig.action(type="pair_listen_again")
         self.assertTrue(rig.pump(lambda: len(fake.commands("listen")) == 2, 2))
@@ -248,7 +248,7 @@ class ResultTests(unittest.TestCase):
     def test_success_without_the_le_half_explains_and_offers_try_again(self):
         rig, fake = self.finish("single")
         self.accept(rig)
-        v = wait_phase(self, rig, "weak")
+        wait_phase(self, rig, "weak")
         rig.action(type="pair_retry")          # unpair our side, then listen again with the default strategy
         self.assertTrue(rig.pump(lambda: fake.commands("unpair") and len(fake.commands("listen")) == 2, 3))
         self.assertEqual(fake.commands("unpair")[0][2], P.PHONE_ADDR)
@@ -269,7 +269,7 @@ class ResultTests(unittest.TestCase):
     def test_checklist_follows_the_connection(self):
         rig, fake = self.finish("success")
         self.accept(rig)
-        v = wait_phase(self, rig, "almost")
+        wait_phase(self, rig, "almost")
         h = rig.helper
         h.conn = dict(h.conn, ancs_ready=False, map_open=False, map_error="forbidden", pbap_open=False,
                       pbap_error="forbidden")
@@ -413,7 +413,7 @@ class FallbackTests(unittest.TestCase):
         rig.action(type="pair_start")
         wait_phase(self, rig, "search")
         rig.action(type="pair_search")
-        v = wait_phase(self, rig, "search")
+        wait_phase(self, rig, "search")
         self.assertTrue(rig.pump(lambda: pair_view(rig)["message"], 4))
         self.assertIn("Settings > Bluetooth", pair_view(rig)["message"])
         self.assertEqual(len(fake.commands("scan")), 3)
@@ -478,7 +478,7 @@ class ForgetTests(unittest.TestCase):
         rig.action(type="forget_ask")
         wait_phase(self, rig, "forget")
         rig.action(type="forget_do")
-        v = wait_phase(self, rig, "forgotten")
+        wait_phase(self, rig, "forgotten")
         self.assertEqual(fake.commands("unpair")[0][2], "AA:BB:CC:DD:EE:FF")
         self.assertEqual(fake.commands("set_device")[0][2], "")
         rig.action(type="pair_done")

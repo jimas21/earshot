@@ -1,0 +1,4 @@
+# Test fixtures, not secrets: a public captcha site key in a saved page (upstream)
+# and a placeholder message body in the Frame helper tests.
+7e99f5046659d09fd9e20b77e08302ddbe5f254b:extension/test/fixtures/roku.html:generic-api-key:473
+967f81ca43341612abc17296e709a5b6a059078e:frame/tests/test_helper.py:generic-api-key:22

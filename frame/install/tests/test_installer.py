@@ -9,7 +9,6 @@ import io
 import json
 import os
 import shutil
-import sys
 import tarfile
 import tempfile
 import unittest
