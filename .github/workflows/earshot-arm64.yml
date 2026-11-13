@@ -15,6 +15,8 @@ on:
       - 'frame'
       - 'frame-*'
       - 'frame/**'
+    tags:
+      - 'v*'
 
 permissions:
   contents: read
@@ -367,18 +369,14 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  # DISABLED. Signs both tarballs and drafts a release. Not enabled until the maintainer
-  # has made the release key pair. To turn it on:
-  #   1. make an ed25519 key pair; keep the private seed offline;
-  #   2. add the seed as the repository secret EARSHOT_RELEASE_KEY (a '#' comment line, then
-  #      base64 of the 32-byte seed, as Tragus does);
-  #   3. paste the base64 PUBLIC key into EARSHOT_RELEASE_PUBKEY below and into PUBKEY in
-  #      frame/install/earshot-frame-install.py (the installer refuses to run without it);
-  #   4. add a tag trigger above (tags: ['v*']), remove "if: false", then push a tag.
-  # It creates a DRAFT only: nothing is public until a person publishes it.
+  # Release: runs only for a pushed tag (v*). Signs both tarballs with the release key
+  # (repository secret EARSHOT_RELEASE_KEY: a '#' comment line, then base64 of the 32-byte
+  # ed25519 seed), checks it against the public key pinned below and in
+  # frame/install/earshot-frame-install.py, and creates a DRAFT release. A person
+  # publishes the draft; nothing is public before that.
   release:
-    name: Sign and draft release (disabled)
-    if: false # TODO(maintainer): enable once the signing key exists, see the steps above
+    name: Sign and draft release
+    if: github.ref_type == 'tag'
     needs: [version, frame, engine]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -403,7 +401,7 @@ jobs:
       - name: Sign the tarballs
         env:
           EARSHOT_RELEASE_KEY: ${{ secrets.EARSHOT_RELEASE_KEY }}
-          EARSHOT_RELEASE_PUBKEY: 'TODO-paste-the-base64-public-key-here'
+          EARSHOT_RELEASE_PUBKEY: 'tzXaDplSb7PN763T4PnKQv3Elih4XplDsCl523lMK8s='
         run: |
           python3 -m venv "${RUNNER_TEMP}/sign"
           "${RUNNER_TEMP}/sign/bin/pip" install --quiet 'cryptography==44.0.0'

@@ -46,11 +46,12 @@ USER_AGENT = "earshot-frame-install"
 MAX_DOWNLOAD = 64 * 1024 * 1024
 
 REPO = "jimas21/earshot"
-# TODO(release): paste the base64 of the raw 32-byte ed25519 PUBLIC key that signs the
-# release tarballs. Until it is set, this installer refuses to install anything (it fails
-# closed): there is nothing to check a download against. The key pair is made and held by
-# the maintainer; never commit the private key. See .github/workflows/earshot-arm64.yml.
-PUBKEY = ""
+# The base64 of the raw 32-byte ed25519 PUBLIC key that signs the release tarballs.
+# SHA-256 fingerprint of the raw key bytes:
+#   78e1b408f2949b742e06195f89ae0375d4d0b726e0041345f3f37d4ad910e85a
+# Without a key this installer refuses to install anything (it fails closed). The private
+# key is held by the maintainer and never committed. See .github/workflows/earshot-arm64.yml.
+PUBKEY = "tzXaDplSb7PN763T4PnKQv3Elih4XplDsCl523lMK8s="
 
 # Assets are named after the release tag with any leading "v" dropped: {ver}.
 COMPONENTS = [

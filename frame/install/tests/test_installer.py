@@ -107,10 +107,13 @@ class SignatureTests(unittest.TestCase):
         with self.assertRaises(ei.InstallError):
             ei.check_signature({"asset": "a", "pubkey": ""}, b"x", "AAAA")
 
-    def test_placeholder_is_marked_todo(self):
-        with open(os.path.join(_INSTALL, "earshot-frame-install.py"), encoding="utf-8") as f:
-            text = f.read()
-        self.assertIn("TODO(release)", text)
+    def test_release_key_is_pinned(self):
+        # A raw 32-byte ed25519 public key, the same one the release workflow checks against.
+        key = base64.b64decode(ei.PUBKEY, validate=True)
+        self.assertEqual(len(key), 32)
+        with open(os.path.join(_INSTALL, "..", "..", ".github", "workflows", "earshot-arm64.yml"), encoding="utf-8") as f:
+            self.assertIn(f"EARSHOT_RELEASE_PUBKEY: '{ei.PUBKEY}'", f.read())
+        self.assertTrue(all(c["pubkey"] == ei.PUBKEY for c in ei.COMPONENTS))
 
 
 class VersionTests(unittest.TestCase):
