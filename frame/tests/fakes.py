@@ -64,6 +64,7 @@ class FakeTether:
         self.received = []          # every command received, parsed
         self.accepts = 0
         self.answers = {}
+        self.handlers = {}          # command -> callable(msg, conn): scripted behaviour (PairingFake)
         self.on_subscribe = [
             {"command": "protocol_info", "version": 1,
              "capabilities": ["bluetooth.connection", "messages", "notifications", "calls"]},
@@ -110,6 +111,9 @@ class FakeTether:
                         self.push(m, conn)
                 for reply in self.answers.get(cmd, []):
                     self.push(reply, conn)
+                handler = self.handlers.get(cmd)
+                if handler:
+                    handler(msg, conn)
 
     def push(self, msg, conn=None):
         conn = conn or self.conn
@@ -341,3 +345,161 @@ class FakeSpawn:
 
     def of(self, name):
         return [c for c in self.calls if os.path.basename(c[0]) == name]
+
+
+# ---------------------------------------------------------------------------
+
+class PairingFake:
+    """Replays the daemon's pairing traffic (docs/PROTOCOL.md section 6; src/core/src/net.cpp
+    run_bt_scan / run_bt_pair / ask_client_to_confirm / run_bt_unpair) for each outcome.
+
+    outcome: success | single (bonded without the LE half) | stale | key_missing | refused | declined_here |
+             timeout | not_found | agent | busy_then_success
+    listen:  True answers bt_pair_listen (the phone-initiated route); False leaves it unanswered, like a
+             daemon that does not know the command; "error" answers it with {"command":"error"}.
+    """
+
+    CODE = "123456"
+    PHONE_ADDR = "11:22:33:44:55:66"
+
+    @staticmethod
+    def phone(name="Pat's iPhone", address=PHONE_ADDR, **extra):
+        d = {"address": address, "name": name, "path": "/org/bluez/hci0/dev_" + address.replace(":", "_"),
+             "paired": False, "bonded": False, "connected": False, "iphone": True, "apple_nearby": True,
+             "airpods": False}
+        d.update(extra)
+        return d
+
+    def __init__(self, tether, outcome="success", listen=True, devices=None, scans=None, busy=2):
+        self.t = tether
+        self.outcome = outcome
+        self.listen = listen
+        self.devices = list(devices if devices is not None else [self.phone()])
+        self.scans = list(scans) if scans is not None else None   # per scan: the device list it finds
+        self.busy_left = busy
+        self.pending = None       # (op, address) waiting for bt_pair_confirm
+        self.listening = None     # op of the open listen window
+        self.log = []
+        tether.handlers.update({
+            "bt_scan": self.on_scan, "bt_pair": self.on_pair, "bt_pair_listen": self.on_listen,
+            "bt_pair_confirm": self.on_confirm, "bt_unpair": self.on_unpair, "bt_set_device": self.on_set_device,
+        })
+        tether.answers["bt_list_devices"] = [self.devices_msg()]
+
+    def devices_msg(self):
+        return {"command": "bt_devices", "devices": self.devices}
+
+    def event(self, command, op, **fields):
+        msg = {"command": command}
+        msg.update(fields)
+        if op:
+            msg["operation_id"] = op
+        self.t.push(msg)
+
+    # --- scan ---
+    def on_scan(self, msg, conn):
+        self.log.append(("scan", None, None))
+        if self.scans is not None:
+            self.devices = list(self.scans.pop(0) if self.scans else [])
+            self.t.answers["bt_list_devices"] = [self.devices_msg()]
+        self.t.push(self.devices_msg())
+        self.event("bt_scan_result", None, success=True, message="Bluetooth scan finished.")
+
+    # --- listen (phone-initiated) ---
+    def on_listen(self, msg, conn):
+        op = msg.get("operation_id")
+        self.log.append(("listen", op, msg.get("seconds")))
+        if msg.get("seconds") == 0:
+            return
+        if self.listen == "error":
+            self.t.push({"command": "error", "message": "unknown_command"})
+            return
+        if not self.listen:
+            return
+        self.listening = op
+        self.event("bt_pair_progress", op, step="listening", detail="120")
+
+    def phone_taps(self, address=PHONE_ADDR):
+        """The user taps the headset under Other Devices on the iPhone."""
+        op = self.listening
+        self.event("bt_pair_progress", op, step="connecting", detail="Pat's iPhone")
+        self.run_outcome(op, address)
+
+    def listen_expires(self):
+        self.event("bt_pair_result", self.listening, success=False, status="timeout", dual_bond=False,
+                   message="No iPhone paired in time.", address="")
+
+    # --- explicit pair (scan and pick) ---
+    def on_pair(self, msg, conn):
+        op, address = msg.get("operation_id"), msg.get("address")
+        self.log.append(("pair", op, address))
+        self.event("bt_pair_progress", op, step="connecting", detail="iPhone")
+        self.run_outcome(op, address)
+
+    def run_outcome(self, op, address):
+        o = self.outcome
+
+        def fail(status, message):
+            self.event("bt_pair_result", op, success=False, status=status, message=message, address=address,
+                       dual_bond=False)
+
+        if o == "busy_then_success" and self.busy_left > 0:
+            self.busy_left -= 1
+            return fail("busy", "Another pairing attempt is already in progress.")
+        if o == "not_found":
+            return fail("not_found", "Device %s is not visible to BlueZ. Unlock the iPhone..." % address)
+        if o == "agent":
+            return fail("error", "Could not register a Bluetooth pairing agent.")
+        if o == "stale":
+            self.event("bt_pair_progress", op, step="error", detail="org.bluez.Error.ConnectionAttemptFailed")
+            return fail("timeout", "The iPhone refused the connection before pairing started: Connection refused. "
+                                   "Delete every entry for this computer on the iPhone...")
+        if o == "key_missing":
+            self.event("bt_pair_progress", op, step="error", detail="br-connection-key-missing")
+            return fail("timeout", "Pairing failed: org.bluez.Error.Failed br-connection-key-missing")
+        if o == "timeout":
+            self.event("bt_pair_progress", op, step="pairing", detail="iPhone")
+            return fail("timeout", "Pairing did not complete. Confirm the prompt on the iPhone.")
+        if o == "refused":
+            self.event("bt_pair_progress", op, step="pairing", detail="iPhone")
+            return fail("rejected", "The iPhone declined the pairing request.")
+        self.event("bt_pair_progress", op, step="confirm", detail=self.CODE)
+        self.event("bt_pair_confirm_request", op, code=self.CODE)
+        self.pending = (op, address)
+
+    def on_confirm(self, msg, conn):
+        self.log.append(("confirm", msg.get("operation_id"), msg.get("accept")))
+        if not self.pending or msg.get("operation_id") != self.pending[0]:
+            return
+        op, address = self.pending
+        self.pending = None
+        if not msg.get("accept"):
+            self.event("bt_pair_progress", op, step="declined", detail="client")
+            return self.event("bt_pair_result", op, success=False, status="rejected", address=address,
+                              dual_bond=False, message="Pairing was not confirmed on this computer.")
+        self.event("bt_pair_progress", op, step="confirmed", detail="client")
+        self.event("bt_pair_progress", op, step="paired", detail="iPhone")
+        self.event("bt_pair_progress", op, step="settling", detail="waiting for the Classic link to settle")
+        self.event("bt_pair_progress", op, step="soliciting", detail="Open Settings > Bluetooth > (i)...")
+        for d in self.devices:
+            if d["address"] == address:
+                d.update(paired=True, bonded=True)
+        self.t.answers["bt_list_devices"] = [self.devices_msg()]
+        dual = self.outcome != "single"
+        self.event("bt_pair_result", op, success=True, status="paired", address=address, dual_bond=dual,
+                   auth_strategy_used="connect-first",
+                   message="Paired with iPhone." + ("" if dual else " The bond covers BR/EDR only."))
+
+    # --- unpair, set device ---
+    def on_unpair(self, msg, conn):
+        self.log.append(("unpair", msg.get("operation_id"), msg.get("address")))
+        self.devices = [d for d in self.devices if d["address"] != msg.get("address")]
+        self.t.answers["bt_list_devices"] = [self.devices_msg()]
+        self.event("bt_unpair_result", msg.get("operation_id"), success=True, status="unpaired",
+                   message="Removed the bond.", address=msg.get("address"))
+
+    def on_set_device(self, msg, conn):
+        self.log.append(("set_device", None, msg.get("address")))
+
+    def commands(self, kind):
+        return [e for e in self.log if e[0] == kind]
