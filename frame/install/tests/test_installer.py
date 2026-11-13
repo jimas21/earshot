@@ -538,7 +538,7 @@ class UninstallTests(unittest.TestCase):
         with self.assertRaises(ei.InstallError):
             self._uninstall()
 
-    def test_without_the_script_the_engines_data_is_still_removed(self):
+    def test_without_the_script_what_earshot_left_behind_is_still_removed(self):
         os.remove(os.path.join(self.data, "frame", "uninstall.sh"))
         dirs = ei.tether_data_dirs()
         for d in dirs:
@@ -548,12 +548,29 @@ class UninstallTests(unittest.TestCase):
         self.assertIn("not installed", out)
         self.assertEqual([d for d in dirs if os.path.exists(d)], [])
 
-    def test_the_engines_data_dirs_follow_xdg(self):
+    def test_a_separately_installed_tether_is_never_touched(self):
+        stock = [os.path.join(os.environ["XDG_DATA_HOME"], "tether"), os.path.join(os.environ["XDG_CONFIG_HOME"], "tether"),
+                 os.path.join(os.environ["XDG_STATE_HOME"], "tether")]
+        for d in stock:
+            os.makedirs(d)
+            open(os.path.join(d, "x"), "w").close()
+        # Earshot installed, and Earshot not installed (a stray run of the uninstaller)
+        self._uninstall()
+        os.remove(os.path.join(self.data, "frame", "uninstall.sh"))
+        self._uninstall()
+        self.assertEqual([d for d in stock if os.path.exists(os.path.join(d, "x"))], stock)
+
+    def test_nothing_is_removed_when_earshot_never_ran(self):
+        shutil.rmtree(self.data)
+        out = self._uninstall()
+        self.assertIn("not installed", out)
+        self.assertEqual(self.calls, [])
+
+    def test_the_engines_data_dirs_are_earshots_own(self):
         dirs = ei.tether_data_dirs()
-        self.assertEqual([os.path.basename(d) for d in dirs], ["tether"] * 3)
-        self.assertTrue(dirs[0].startswith(os.environ["XDG_DATA_HOME"]))
-        self.assertTrue(dirs[1].startswith(os.environ["XDG_CONFIG_HOME"]))
-        self.assertTrue(dirs[2].startswith(os.environ["XDG_STATE_HOME"]))
+        self.assertEqual([os.path.basename(d) for d in dirs], ["data", "config", "state"])
+        for d in dirs:
+            self.assertEqual(os.path.dirname(d), os.path.join(self.data, "engine-home"))
 
 
 class CommandLineTests(unittest.TestCase):

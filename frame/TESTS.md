@@ -100,8 +100,9 @@ layout). Stop the upstream Tether test daemon from test 2 first. Then:
    stay on the phone. Back to Auto.
 9. `top`: idle CPU and memory of `tetherd` and `earshot-steamui.py` against the budget in
    PLAN.md.
-10. `Uninstall-Earshot.desktop` (or `uninstall.sh`): the tab goes, `~/.local/share/tether`,
-   `~/.config/tether` and `~/.local/state/tether` are gone, nothing of Tragus is touched.
+10. `Uninstall-Earshot.desktop` (or `uninstall.sh`): the tab goes, `~/.local/share/earshot`
+   (including `engine-home`) is gone, nothing of Tragus is touched, and a separately installed Tether's
+   `~/.local/share/tether`, `~/.config/tether` and `~/.local/state/tether` are still there.
 
 ## 4. Presence sensor
 

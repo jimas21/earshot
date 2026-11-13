@@ -24,6 +24,11 @@ Environment=TETHER_NO_TCP=1
 Environment=TETHER_NO_ROOT=1
 # The headset keeps no copy of the phone's messages or contacts on disk.
 Environment=TETHER_RETENTION=none
+# The engine's settings, key and state live in Earshot's own directories, never in the ones a separately
+# installed Tether uses (~/.local/share/tether and friends), so removing Earshot cannot touch that Tether.
+Environment=XDG_DATA_HOME=%h/.local/share/earshot/engine-home/data
+Environment=XDG_CONFIG_HOME=%h/.local/share/earshot/engine-home/config
+Environment=XDG_STATE_HOME=%h/.local/share/earshot/engine-home/state
 UnsetEnvironment=LD_LIBRARY_PATH LD_PRELOAD
 Restart=on-failure
 RestartSec=5

@@ -525,13 +525,17 @@ def install(args, status):
     print("Phone, and tap Pair iPhone. Do not pair in Steam's Bluetooth settings.")
 
 
+def engine_home():
+    return os.path.join(DATA_DIR, "engine-home")
+
+
 def tether_data_dirs():
     """Where the engine keeps what it learns about the phone: the message journal and contact cache,
-    its settings and its encryption key. They belong to Earshot's engine, so removing Earshot removes them."""
-    data = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    config = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
-    return [os.path.join(data, "tether"), os.path.join(config, "tether"), os.path.join(state, "tether")]
+    its settings and its encryption key. earshot-tetherd.service points the engine's XDG directories at
+    these, so they are Earshot's alone: a Tether installed separately keeps its own ~/.local/share/tether
+    and friends, and removing Earshot never touches them."""
+    home = engine_home()
+    return [os.path.join(home, "data"), os.path.join(home, "config"), os.path.join(home, "state")]
 
 
 def remove_tether_data():
@@ -543,7 +547,9 @@ def uninstall(args):
     script = os.path.join(DATA_DIR, "frame", "uninstall.sh")
     if not os.path.isfile(script):
         print("Earshot is not installed.")
-        remove_tether_data()
+        # Only what an Earshot install left behind: nothing is removed when Earshot never ran here.
+        if os.path.isdir(engine_home()):
+            remove_tether_data()
     else:
         cmd = ["sh", script] + (["--purge"] if args.purge else [])
         r = subprocess.run(cmd, env=clean_env())

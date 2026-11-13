@@ -1,8 +1,10 @@
 #!/bin/sh
 # Remove Earshot's user services and files. Earshot's own settings stay in ~/.config/earshot
 # unless --purge is given. What the engine learned about the phone is always removed: its message
-# journal and contact cache (~/.local/share/tether), its settings and encryption key
-# (~/.config/tether) and its state (~/.local/state/tether). No root is needed.
+# journal and contact cache, its settings and encryption key, and its state all live under
+# ~/.local/share/earshot/engine-home, which belongs to Earshot alone. A Tether installed separately keeps
+# its own ~/.local/share/tether, ~/.config/tether and ~/.local/state/tether, and they are never touched.
+# No root is needed.
 set -u
 purge=""
 for arg in "$@"; do
@@ -45,9 +47,9 @@ fi
 
 rm -rf "$data"
 rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/earshot"
-# The engine's own data: messages, contacts, its settings and key
-rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/tether" "${XDG_CONFIG_HOME:-$HOME/.config}/tether" \
-       "${XDG_STATE_HOME:-$HOME/.local/state}/tether"
+# The engine's own data (messages, contacts, its settings and key): the service file puts it at a fixed place
+# under $HOME, which is not $data when XDG_DATA_HOME is set to somewhere else.
+rm -rf "$HOME/.local/share/earshot/engine-home"
 if [ -n "$purge" ]; then
     rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/earshot"
     echo "Earshot and its settings removed."

@@ -87,9 +87,9 @@ keeps the old install.
 **Remove:** open
 [`Uninstall-Earshot.desktop`](https://github.com/jimas21/earshot/releases/latest/download/Uninstall-Earshot.desktop)
 the same way. It removes Earshot's services and files, and **also deletes what the engine kept
-about your phone**: the stored messages and contacts (`~/.local/share/tether`), its settings and
-encryption key (`~/.config/tether`) and its state (`~/.local/state/tether`). Earshot's own
-settings in `~/.config/earshot` stay unless you remove them too (`--uninstall --purge`). To
+about your phone**: the stored messages and contacts, its settings and encryption key, and its
+state, all kept in `~/.local/share/earshot/engine-home` (a Tether installed separately keeps its own
+directories and is not touched). Earshot's own settings in `~/.config/earshot` stay unless you remove them too (`--uninstall --purge`). To
 make the iPhone forget the headset, use Forget This Device on the iPhone, or **Forget this
 iPhone** in the Phone tab's Settings.
 

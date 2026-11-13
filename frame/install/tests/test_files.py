@@ -103,6 +103,9 @@ class UnitFileTests(unittest.TestCase):
         self.assertIn("Environment=TETHER_NO_TCP=1", s["Service"])   # Bluetooth only: nothing listens on the network
         self.assertIn("Environment=TETHER_NO_ROOT=1", s["Service"])  # stock BlueZ, normal user
         self.assertIn("Environment=TETHER_RETENTION=none", s["Service"])  # no message or contact copies on disk
+        # Earshot's engine keeps its own directories, not the ones a separately installed Tether uses
+        for name, sub in (("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"), ("XDG_STATE_HOME", "state")):
+            self.assertIn("Environment=%s=%%h/.local/share/earshot/engine-home/%s" % (name, sub), s["Service"])
         self.assertIn("NoNewPrivileges=yes", s["Service"])
         self.assertFalse([l for l in s["Service"] if l.startswith("User=")])  # runs as the user manager's user
 
@@ -228,26 +231,33 @@ class ScriptRunTests(unittest.TestCase):
         self.assertIn("missing", r.stderr)
 
     def test_uninstall_removes_the_engines_own_data_but_not_other_programs(self):
-        engine = [os.path.join(self.home, ".local/share/tether/messages.ndjson.enc"),
-                  os.path.join(self.home, ".config/tether/store.key"),
-                  os.path.join(self.home, ".config/tether/bluetooth.json"),
-                  os.path.join(self.home, ".local/state/tether/x")]
+        home = os.path.join(self.home, ".local/share/earshot/engine-home")
+        engine = [os.path.join(home, "data/messages.ndjson.enc"),
+                  os.path.join(home, "config/store.key"),
+                  os.path.join(home, "config/bluetooth.json"),
+                  os.path.join(home, "state/x")]
+        # a Tether installed separately, and another program
+        stock = [os.path.join(self.home, ".local/share/tether/messages.ndjson.enc"),
+                 os.path.join(self.home, ".config/tether/store.key"),
+                 os.path.join(self.home, ".local/state/tether/x")]
         other = os.path.join(self.home, ".config/tragus/keep")
-        for path in engine + [other]:
+        for path in engine + stock + [other]:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             open(path, "w").close()
         self.sh("install.sh")
         self.assertEqual(self.sh("uninstall.sh").returncode, 0)  # without --purge: still removed
         for path in engine:
             self.assertFalse(os.path.exists(path), path)
-            self.assertFalse(os.path.exists(os.path.dirname(path)), path)
-        self.assertTrue(os.path.exists(other))
+        self.assertFalse(os.path.exists(home))
+        for path in stock + [other]:
+            self.assertTrue(os.path.exists(path), path)
         self.assertTrue(os.path.isdir(os.path.join(self.home, ".config/earshot")))  # Earshot settings kept
 
     def test_the_uninstall_text_says_what_it_removes(self):
         text = read("uninstall.sh")
-        for place in (".local/share}/tether", ".config}/tether"):
-            self.assertIn(place, text)
+        self.assertIn("engine-home", text)
+        # the stock Tether directories are named only to say they are left alone, never deleted
+        self.assertNotIn('}/tether"', text)
 
     def test_uninstall_runs_the_helpers_teardown_first(self):
         usr_python = "/usr/bin/python3"
