@@ -93,6 +93,16 @@ namespace {
         std::thread thread_;
     };
 
+    // Turns the network listener off for a test and back on however the test ends, so a failed ASSERT cannot leave
+    // it off for the tests that follow.
+    class TcpDisabledGuard {
+    public:
+        TcpDisabledGuard() { tether::set_tcp_enabled(false); }
+        ~TcpDisabledGuard() { tether::set_tcp_enabled(true); }
+        TcpDisabledGuard(const TcpDisabledGuard&) = delete;
+        TcpDisabledGuard& operator=(const TcpDisabledGuard&) = delete;
+    };
+
     class ProcessGuard {
     public:
         ProcessGuard(pid_t pid) : pid_(pid) {}
@@ -527,7 +537,7 @@ namespace {
         ASSERT_TRUE(unix_server.start());
         EventLoopGuard loop_guard(loop);
 
-        tether::set_tcp_enabled(false);
+        TcpDisabledGuard tcp_disabled;
         const int client = connect_to_daemon();
         ASSERT_GE(client, 0);
         for (const char* command : {"pair_request", "discover", "accept_device", "forget_device", "send_file"}) {
@@ -538,7 +548,6 @@ namespace {
             EXPECT_NE(reply.find("error"), std::string::npos) << command << ": " << reply;
         }
         close(client);
-        tether::set_tcp_enabled(true);
     }
 
     // A subscriber that stops reading must not just be forgotten: its socket has to be shut down so the client
