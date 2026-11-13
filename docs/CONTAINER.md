@@ -28,7 +28,7 @@ needs a Wayland session and is not available here.
 ## Host prerequisites
 
 1. Configure BlueZ and the adapter using [the Bluetooth instructions](BLUETOOTH.md)
-   and [README prerequisites](../README.md#bluetooth-for-messages-and-notifications).
+   and [README prerequisites](UPSTREAM-README.md#bluetooth-for-messages-and-notifications).
    In particular, configure the experimental bearer API and adapter class **on
    the host before pairing**, then enable the iPhone's Messages/Contacts permissions.
    Upstream currently recommends BlueZ 5.86+ on the host. The Ubuntu 26.04 image

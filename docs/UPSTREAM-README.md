@@ -1,4 +1,6 @@
-![Tether: an iPhone linked to the tetherd Linux daemon over Wi-Fi and Bluetooth LE, providing file transfer, clipboard sync, messages, contacts, and notifications](docs/img/tether_header.png)
+> This is the README of upstream [Tether](https://github.com/zackb/tether), kept as it was. Earshot, the Steam Frame fork, is described in the [front page](../README.md).
+
+![Tether: an iPhone linked to the tetherd Linux daemon over Wi-Fi and Bluetooth LE, providing file transfer, clipboard sync, messages, contacts, and notifications](img/tether_header.png)
 
 # Tether
 
@@ -6,7 +8,7 @@
 
 **Tether** aims to support all of the [Apple Continuity](https://www.apple.com/macos/continuity/) features on Linux that are technically possible. If you've migrated away from macOS but still carry an iPhone, Tether provides the missing ecosystem integration.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../LICENSE)
 
 [![Get the Firefox Add-on](https://img.shields.io/badge/Firefox-Add--on-orange.svg)](https://addons.mozilla.org/en-US/firefox/addon/tether-browser-extension/)
 
@@ -19,7 +21,7 @@
 [![Debian](https://github.com/zackb/tether/actions/workflows/debian.yml/badge.svg?branch=main)](https://github.com/zackb/tether/actions/workflows/debian.yml)
 [![Ubuntu](https://github.com/zackb/tether/actions/workflows/ubuntu.yml/badge.svg?branch=main)](https://github.com/zackb/tether/actions/workflows/ubuntu.yml)
 
-![The Tether desktop app's Messages view: a conversation list on the left and an open conversation with sent and received messages on the right](docs/img/messages.webp)
+![The Tether desktop app's Messages view: a conversation list on the left and an open conversation with sent and received messages on the right](img/messages.webp)
 
 [![GitHub Trending Repository of the Day](https://api.star-history.com/badge?repo=zackb/tether&type=trending&theme=dark)](https://www.star-history.com/zackb/tether)
 
@@ -64,8 +66,8 @@ Recent calls from the iPhone are listed with a button to call back, and the iPho
 
 Out of the box, Linux offers itself to the iPhone as a Bluetooth speaker. The iPhone's music and sounds then play on the computer, and call control stops working. One small audio setting fixes it, and you pick which way:
 
-- **Keep the iPhone's sound on the iPhone, always.** See [Keeping the phone's audio on the phone](docs/BLUETOOTH.md#keeping-the-phones-audio-on-the-phone).
-- **Switch whenever you like.** Settings > Experimental > *Play the iPhone's audio on this computer*, or `tether --bt-phone-audio here` and `tether --bt-phone-audio phone`. See [Switching it instead](docs/BLUETOOTH.md#switching-it-instead).
+- **Keep the iPhone's sound on the iPhone, always.** See [Keeping the phone's audio on the phone](BLUETOOTH.md#keeping-the-phones-audio-on-the-phone).
+- **Switch whenever you like.** Settings > Experimental > *Play the iPhone's audio on this computer*, or `tether --bt-phone-audio here` and `tether --bt-phone-audio phone`. See [Switching it instead](BLUETOOTH.md#switching-it-instead).
 
 ### Continuity Camera
 Use the iPhone as a webcam. Open the Camera tab in the iOS app and tap **Start Streaming**. The desktop gets a PipeWire camera named after the phone. Keep the app open while streaming, because iOS turns the camera off for apps in the background.
@@ -97,7 +99,7 @@ The extension communicates with `tetherd` via native messaging. This allows user
 
 ### Browser Extension
 - Firefox: [Tether Browser Extension](https://addons.mozilla.org/en-US/firefox/addon/tether-browser-extension/)
-- Google Chrome / Chromium: [Build and install locally](extension/README.md#local-chrome--chromium-installation).
+- Google Chrome / Chromium: [Build and install locally](../extension/README.md#local-chrome--chromium-installation).
 
 ### Mail Extension
 - Thunderbird: [Tether Mail Extension](https://addons.thunderbird.net/en-US/thunderbird/addon/tether-mail-extension/)
@@ -251,7 +253,7 @@ A headless Linux Docker deployment is available for amd64 and arm64. It runs
 persistent state/download mounts. Pair and send messages/files through the CLI;
 there is no web UI yet. Bluetooth messaging still needs the iPhone near the host.
 
-See [docs/CONTAINER.md](docs/CONTAINER.md) for prerequisites, Compose setup,
+See [docs/CONTAINER.md](CONTAINER.md) for prerequisites, Compose setup,
 security considerations and the real-iPhone acceptance checklist. No registry
 image is published by this setup.
 
@@ -350,7 +352,7 @@ tether accept 9a4f21...
 tether status                                  # devices, links, and recent transfers
 ```
 
-See [docs/HEADLESS.md](docs/HEADLESS.md), or [the container guide](docs/CONTAINER.md)
+See [docs/HEADLESS.md](HEADLESS.md), or [the container guide](CONTAINER.md)
 for Docker deployment.
 
 ### Terminal UI
@@ -503,7 +505,7 @@ addresses over Bluetooth, and connects on its own from then on.
 
 ### Bluetooth
 
-Messages and notifications need one-time system setup. See [docs/BLUETOOTH.md](docs/BLUETOOTH.md), or run:
+Messages and notifications need one-time system setup. See [docs/BLUETOOTH.md](BLUETOOTH.md), or run:
 
 ```bash
 tether bt setup
@@ -528,7 +530,7 @@ Keyboard shortcuts in the desktop app:
 
 If something can't be reached with the keyboard, is read wrongly by a screen reader, or is hard to see, please [open an issue](https://github.com/zackb/tether/issues). Those reports are bugs.
 
-The manual checks run before a release are in [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md).
+The manual checks run before a release are in [docs/ACCESSIBILITY.md](ACCESSIBILITY.md).
 
 Colors come from your GTK theme. You can override tether specific elements in `~/.config/gtk-3.0/gtk.css` and restart the app.
 
@@ -545,7 +547,7 @@ Example:
 
 Report security findings privately through
 [GitHub Security Advisories](https://github.com/zackb/tether/security/advisories/new),
-not a public issue. See [SECURITY.md](.github/SECURITY.md).
+not a public issue. See [SECURITY.md](../.github/SECURITY.md).
 
 ## Acknowledgements
 * [ancs4linux](https://github.com/pzmarzly/ancs4linux) for pioneering the ANCS notifications technique.
@@ -558,4 +560,4 @@ Contributions are welcome!
 
 ## License
 
-Tether is licensed under the [MIT License](LICENSE).
+Tether is licensed under the [MIT License](../LICENSE).
