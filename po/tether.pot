@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether 0.3.5\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-06 17:42-0800\n"
+"POT-Creation-Date: 2026-11-13 14:54-0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1328,6 +1328,12 @@ msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
+"Running without BlueZ's experimental mode. Notifications work when the "
+"iPhone itself starts the pairing and reconnects."
+msgstr ""
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
 "Notification mirroring needs BlueZ's experimental bearer API "
 "(org.bluez.Bearer.LE1), which bluetoothd is not exposing. Set this up before "
 "pairing: a bond made without it has no LE half."
@@ -1343,6 +1349,13 @@ msgid ""
 "This Bluetooth adapter is known to pair without Secure Connections, so "
 "iPhone notifications cannot work on it and re-pairing will not change that. "
 "Messages and contacts still work. See {}"
+msgstr ""
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
+"The iPhone is paired but has not offered notifications yet. Open Settings > "
+"Bluetooth on the iPhone and check Show Notifications for this device. If it "
+"never appears, forget this device on the iPhone and pair again."
 msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
@@ -1381,8 +1394,22 @@ msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
+"This adapter does not present itself as A/V Hands-Free. Changing that needs "
+"administrator rights, so it is left alone. If the iPhone does not offer "
+"Messages or Contacts, that is why."
+msgstr ""
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
 "The iPhone will not offer its Messages and Contacts permissions until this "
 "adapter presents itself as A/V Hands-Free (major 4, minor 8)."
+msgstr ""
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
+"The kernel has L2CAP ERTM disabled (bluetooth.disable_ertm). Messages and "
+"Contacts may fail to open. Turning it back on needs administrator rights, so "
+"it is left alone."
 msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
@@ -1479,6 +1506,26 @@ msgstr ""
 #: src/core/src/bluetooth/pairing.cpp
 #, c++-format
 msgid "Paired with {}."
+msgstr ""
+
+#: src/core/src/bluetooth/pairing.cpp
+msgid "An iPhone"
+msgstr ""
+
+#: src/core/src/bluetooth/pairing.cpp
+msgid "Stopped waiting for the iPhone."
+msgstr ""
+
+#: src/core/src/bluetooth/pairing.cpp
+msgid ""
+"The iPhone connected but pairing did not finish. Keep it unlocked on "
+"Settings > Bluetooth and try again."
+msgstr ""
+
+#: src/core/src/bluetooth/pairing.cpp
+msgid ""
+"Nobody connected. On the iPhone, open Settings > Bluetooth and tap this "
+"device."
 msgstr ""
 
 #: src/core/src/bluetooth/pairing.cpp
@@ -1675,6 +1722,10 @@ msgstr ""
 
 #: src/core/src/net.cpp
 msgid "Not an AirPods device."
+msgstr ""
+
+#: src/core/src/net.cpp
+msgid "The network listener is turned off on this machine."
 msgstr ""
 
 #: src/core/src/net.cpp

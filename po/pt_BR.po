@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-06 17:42-0800\n"
+"POT-Creation-Date: 2026-11-13 14:54-0800\n"
 "PO-Revision-Date: 2026-08-23\n"
 "Last-Translator: Tether project\n"
 "Language-Team: Brazilian Portuguese\n"
@@ -354,7 +354,11 @@ msgid ""
 "The Flatpak cannot see any browser or mail client yet. For each one you use, "
 "run its line, then run this again:\n"
 "\n"
-msgstr "O Flatpak ainda não vê nenhum navegador ou cliente de e-mail. Para cada um que você usa, execute a linha correspondente e depois execute isto novamente:\n\n"
+msgstr ""
+"O Flatpak ainda não vê nenhum navegador ou cliente de e-mail. Para cada um "
+"que você usa, execute a linha correspondente e depois execute isto "
+"novamente:\n"
+"\n"
 
 #: src/cli/main.cpp
 #, c-format
@@ -1487,6 +1491,12 @@ msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
+"Running without BlueZ's experimental mode. Notifications work when the "
+"iPhone itself starts the pairing and reconnects."
+msgstr ""
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
 "Notification mirroring needs BlueZ's experimental bearer API "
 "(org.bluez.Bearer.LE1), which bluetoothd is not exposing. Set this up before "
 "pairing: a bond made without it has no LE half."
@@ -1511,6 +1521,13 @@ msgstr ""
 "Este adaptador Bluetooth é conhecido por parear sem Secure Connections, "
 "então as notificações do iPhone não funcionam nele e parear de novo não muda "
 "isso. Mensagens e contatos continuam funcionando. Veja {}"
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
+"The iPhone is paired but has not offered notifications yet. Open Settings > "
+"Bluetooth on the iPhone and check Show Notifications for this device. If it "
+"never appears, forget this device on the iPhone and pair again."
+msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1561,11 +1578,25 @@ msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
+"This adapter does not present itself as A/V Hands-Free. Changing that needs "
+"administrator rights, so it is left alone. If the iPhone does not offer "
+"Messages or Contacts, that is why."
+msgstr ""
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
 "The iPhone will not offer its Messages and Contacts permissions until this "
 "adapter presents itself as A/V Hands-Free (major 4, minor 8)."
 msgstr ""
 "O iPhone não oferecerá suas permissões de Mensagens e Contatos enquanto este "
 "adaptador não se apresentar como A/V Hands-Free (major 4, minor 8)."
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
+"The kernel has L2CAP ERTM disabled (bluetooth.disable_ertm). Messages and "
+"Contacts may fail to open. Turning it back on needs administrator rights, so "
+"it is left alone."
+msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1680,6 +1711,30 @@ msgstr "Falha no pareamento: {}"
 #, c++-format
 msgid "Paired with {}."
 msgstr "Pareado com {}."
+
+#: src/core/src/bluetooth/pairing.cpp
+msgid "An iPhone"
+msgstr ""
+
+#: src/core/src/bluetooth/pairing.cpp
+#, fuzzy
+msgid "Stopped waiting for the iPhone."
+msgstr "Aguardando o iPhone."
+
+#: src/core/src/bluetooth/pairing.cpp
+msgid ""
+"The iPhone connected but pairing did not finish. Keep it unlocked on "
+"Settings > Bluetooth and try again."
+msgstr ""
+
+#: src/core/src/bluetooth/pairing.cpp
+#, fuzzy
+msgid ""
+"Nobody connected. On the iPhone, open Settings > Bluetooth and tap this "
+"device."
+msgstr ""
+"Nenhum iPhone encontrado. Desbloqueie o telefone e abra Ajustes > Bluetooth "
+"para que ele se anuncie, depois procure de novo."
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid "No Bluetooth adapter is present."
@@ -1899,6 +1954,11 @@ msgstr "O Bluetooth está indisponível nesta máquina."
 #: src/core/src/net.cpp
 msgid "Not an AirPods device."
 msgstr "Não é um dispositivo AirPods."
+
+#: src/core/src/net.cpp
+#, fuzzy
+msgid "The network listener is turned off on this machine."
+msgstr "O Bluetooth está indisponível nesta máquina."
 
 #: src/core/src/net.cpp
 msgid "Unknown listening mode."

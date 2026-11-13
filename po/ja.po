@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-06 17:42-0800\n"
+"POT-Creation-Date: 2026-11-13 14:54-0800\n"
 "PO-Revision-Date: 2026-08-23\n"
 "Last-Translator: Tether project\n"
 "Language-Team: Japanese\n"
@@ -352,7 +352,10 @@ msgid ""
 "The Flatpak cannot see any browser or mail client yet. For each one you use, "
 "run its line, then run this again:\n"
 "\n"
-msgstr "Flatpak からはまだブラウザーやメールクライアントが見えません。使用しているものごとに該当する行を実行してから、もう一度これを実行してください:\n\n"
+msgstr ""
+"Flatpak からはまだブラウザーやメールクライアントが見えません。使用しているも"
+"のごとに該当する行を実行してから、もう一度これを実行してください:\n"
+"\n"
 
 #: src/cli/main.cpp
 #, c-format
@@ -1468,6 +1471,12 @@ msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
+"Running without BlueZ's experimental mode. Notifications work when the "
+"iPhone itself starts the pairing and reconnects."
+msgstr ""
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
 "Notification mirroring needs BlueZ's experimental bearer API "
 "(org.bluez.Bearer.LE1), which bluetoothd is not exposing. Set this up before "
 "pairing: a bond made without it has no LE half."
@@ -1491,6 +1500,13 @@ msgstr ""
 "この Bluetooth アダプタは Secure Connections なしでペアリングすることがわかっ"
 "ているため、iPhone の通知は動作せず、再ペアリングしても変わりません。メッセー"
 "ジと連絡先は引き続き使えます。{} を参照してください"
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
+"The iPhone is paired but has not offered notifications yet. Open Settings > "
+"Bluetooth on the iPhone and check Show Notifications for this device. If it "
+"never appears, forget this device on the iPhone and pair again."
+msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1540,11 +1556,25 @@ msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
+"This adapter does not present itself as A/V Hands-Free. Changing that needs "
+"administrator rights, so it is left alone. If the iPhone does not offer "
+"Messages or Contacts, that is why."
+msgstr ""
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
 "The iPhone will not offer its Messages and Contacts permissions until this "
 "adapter presents itself as A/V Hands-Free (major 4, minor 8)."
 msgstr ""
 "このアダプタが A/V Hands-Free (major 4, minor 8) として提示されるまで、"
 "iPhone はメッセージと連絡先の許可を提示しません。"
+
+#: src/core/src/bluetooth/objects.cpp
+msgid ""
+"The kernel has L2CAP ERTM disabled (bluetooth.disable_ertm). Messages and "
+"Contacts may fail to open. Turning it back on needs administrator rights, so "
+"it is left alone."
+msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1659,6 +1689,30 @@ msgstr "ペアリングに失敗しました: {}"
 #, c++-format
 msgid "Paired with {}."
 msgstr "{} とペアリングしました。"
+
+#: src/core/src/bluetooth/pairing.cpp
+msgid "An iPhone"
+msgstr ""
+
+#: src/core/src/bluetooth/pairing.cpp
+#, fuzzy
+msgid "Stopped waiting for the iPhone."
+msgstr "iPhone を待っています。"
+
+#: src/core/src/bluetooth/pairing.cpp
+msgid ""
+"The iPhone connected but pairing did not finish. Keep it unlocked on "
+"Settings > Bluetooth and try again."
+msgstr ""
+
+#: src/core/src/bluetooth/pairing.cpp
+#, fuzzy
+msgid ""
+"Nobody connected. On the iPhone, open Settings > Bluetooth and tap this "
+"device."
+msgstr ""
+"iPhone が見つかりません。iPhone のロックを解除し、設定 > Bluetooth を開いてア"
+"ドバタイズさせてから、もう一度検索してください。"
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid "No Bluetooth adapter is present."
@@ -1879,6 +1933,11 @@ msgstr "このマシンでは Bluetooth を利用できません。"
 #: src/core/src/net.cpp
 msgid "Not an AirPods device."
 msgstr "AirPods ではありません。"
+
+#: src/core/src/net.cpp
+#, fuzzy
+msgid "The network listener is turned off on this machine."
+msgstr "このマシンでは Bluetooth を利用できません。"
 
 #: src/core/src/net.cpp
 msgid "Unknown listening mode."
