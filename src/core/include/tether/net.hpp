@@ -142,6 +142,8 @@ namespace tether {
         TcpServer& tcp_server_;
         int server_fd_ = -1;
         std::string socket_path_;
+        // Every accepted client, including ones that have not sent anything yet (those have no buffer).
+        std::set<int> client_fds_;
         std::map<int, std::string> client_buffers_;
     };
 

@@ -1384,16 +1384,14 @@ namespace tether {
             unlink(socket_path_.c_str());
         }
 
-        // Clean up any remaining clients
-        std::vector<int> client_fds;
-        for (auto const& [fd, _] : client_buffers_) {
-            client_fds.push_back(fd);
-        }
+        // Clean up any remaining clients, including idle ones that never sent anything
+        std::vector<int> client_fds(client_fds_.begin(), client_fds_.end());
         for (int fd : client_fds) {
             loop_.removeFd(fd);
             close(fd);
             unregister_client_fd(fd);
             client_buffers_.erase(fd);
+            client_fds_.erase(fd);
         }
     }
 
@@ -1419,8 +1417,8 @@ namespace tether {
             close(client_fd);
             return;
         }
-        if (client_buffers_.size() >= MAX_LOCAL_CLIENTS) {
-            debug::log(WARN, "UnixServer: too many clients ({}); refusing one", client_buffers_.size());
+        if (client_fds_.size() >= MAX_LOCAL_CLIENTS) {
+            debug::log(WARN, "UnixServer: too many clients ({}); refusing one", client_fds_.size());
             close(client_fd);
             return;
         }
@@ -1431,6 +1429,7 @@ namespace tether {
 
         // Register client for broadcasts
         register_client_fd(client_fd);
+        client_fds_.insert(client_fd);
         loop_.addFd(client_fd, [this](int cfd) { handle_client(cfd); });
         debug::log(INFO, "UnixServer: New connection (fd: {})", client_fd);
     }
@@ -1449,6 +1448,7 @@ namespace tether {
             if (buffer.size() > MAX_CLIENT_BUFFER_BYTES) {
                 debug::log(ERR, "UnixServer: client {} sent an unframed stream; dropping it", client_fd);
                 client_buffers_.erase(client_fd);
+                client_fds_.erase(client_fd);
                 unregister_client_fd(client_fd);
                 loop_.removeFd(client_fd);
                 close(client_fd);
@@ -2062,6 +2062,7 @@ namespace tether {
             // Disconnected
             debug::log(INFO, "UnixServer: Client disconnected (fd: {})", client_fd);
             client_buffers_.erase(client_fd);
+            client_fds_.erase(client_fd);
             unregister_client_fd(client_fd);
             loop_.removeFd(client_fd);
             close(client_fd);

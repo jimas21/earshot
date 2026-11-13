@@ -550,6 +550,37 @@ namespace {
         close(client);
     }
 
+    // The cap counts connections, not clients that have sent something: a runaway that connects and stays silent
+    // used to cost a descriptor each without ever reaching it.
+    TEST(UnixServerTest, IdleConnectionsCountTowardsTheClientLimit) {
+        const std::string runtime_dir = unique_test_dir("tether_unix_client_cap_test");
+        CleanupGuard cleanup_guard(runtime_dir);
+        std::filesystem::remove_all(runtime_dir);
+        std::filesystem::create_directories(runtime_dir);
+        ScopedEnvVar xdg_runtime_dir("XDG_RUNTIME_DIR", runtime_dir);
+
+        tether::EpollEventLoop loop;
+        tether::TcpServer tcp_server(loop, 0);
+        tether::UnixServer unix_server(loop, tcp_server);
+        ASSERT_TRUE(unix_server.start());
+        EventLoopGuard loop_guard(loop);
+
+        std::vector<int> idle;
+        for (int i = 0; i < 64; ++i) {
+            const int client = connect_to_daemon();
+            ASSERT_GE(client, 0) << "connection " << i;
+            idle.push_back(client);
+        }
+        // The server accepts in order, so by the time it sees this one the 64 above are all registered.
+        const int extra = connect_to_daemon(5);
+        ASSERT_GE(extra, 0);
+        char byte;
+        EXPECT_EQ(read(extra, &byte, 1), 0) << "the connection over the limit should have been closed";
+        close(extra);
+        for (int fd : idle)
+            close(fd);
+    }
+
     // A subscriber that stops reading must not just be forgotten: its socket has to be shut down so the client
     // sees EOF and reconnects, rather than sitting connected and deaf.
     TEST(LocalBroadcastTest, StalledSubscriberIsDroppedAndSeesEof) {
