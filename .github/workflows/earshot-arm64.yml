@@ -1,0 +1,442 @@
+name: Earshot ARM64
+
+# Builds what the Steam Frame gets, on GitHub's free ARM64 runner (the same glibc era as
+# SteamOS's userland needs, no cross compiling):
+#   - earshot-engine-<ver>-aarch64.tar.gz  tetherd + tether, headless, stripped, with any
+#     library SteamOS does not ship bundled under lib/ ($ORIGIN/lib RUNPATH)
+#   - earshot-frame-<ver>.tar.gz           the installer, unit files, helper and Phone tab
+# Branch pushes produce workflow artifacts only. The disabled "release" job at the bottom
+# is the signing and publishing step, modelled on Tragus's; it needs the maintainer's key.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'frame'
+      - 'frame-*'
+      - 'frame/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # SteamOS ships glibc 2.43 and a current GCC; refuse anything that needs more than this.
+  MAX_GLIBC: '2.43'
+  MAX_GLIBCXX: '3.4.34'
+  # Libraries a SteamOS (Arch based) install already has, by soname stem. Anything else the
+  # engine links against is bundled under lib/. glib, openssl and the C++ runtime are part
+  # of the base system there; the rest are their dependencies.
+  SYSTEM_LIBS: 'ld-linux-aarch64|libc|libm|libdl|libpthread|librt|libgcc_s|libstdc\+\+|libatomic|libz|libzstd|libssl|libcrypto|libglib-2\.0|libgobject-2\.0|libgio-2\.0|libgmodule-2\.0|libffi|libpcre2-8|libmount|libblkid|libselinux'
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    outputs:
+      ver: ${{ steps.v.outputs.ver }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: v
+        run: |
+          base="$(sed -n 's/^project(tether VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          test -n "${base}"
+          echo "ver=${base}-frame.${GITHUB_RUN_NUMBER}" >> "${GITHUB_OUTPUT}"
+
+  # Tests and the Frame package: the installer, units, system setup and the Phone tab.
+  frame:
+    name: Frame package
+    needs: version
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    env:
+      VER: ${{ needs.version.outputs.ver }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the installer
+        run: |
+          python3 -m py_compile frame/install/earshot-frame-install.py frame/install/earshot-system-setup.py
+          sh -n frame/install/install.sh
+          sh -n frame/install/uninstall.sh
+          sh -n frame/install/earshot-system-setup.sh
+          python3 -m unittest discover -s frame/install/tests -v
+
+      # frame/tests holds the helper and menu tests (stand-in Tether, DevTools and vrcmd).
+      # Not every branch has them yet.
+      - name: Test the helper and menu
+        run: |
+          if ls frame/tests/test_*.py >/dev/null 2>&1; then
+            python3 -m unittest discover -s frame/tests -p 'test_*.py' -v
+          else
+            echo "no frame/tests/test_*.py on this branch; skipped"
+          fi
+          for js in frame/menu/*.js; do
+            [ -e "${js}" ] || continue
+            node --check "${js}"
+          done
+          [ -e frame/menu/earshot-steamui.py ] && python3 -m py_compile frame/menu/earshot-steamui.py || true
+
+      - name: Package
+        env:
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -u
+          name="earshot-frame"
+          rm -rf dist out
+          mkdir -p "dist/${name}" out
+          d="dist/${name}"
+          cp frame/install/install.sh frame/install/uninstall.sh \
+             frame/install/earshot-system-setup.sh frame/install/earshot-system-setup.py \
+             frame/install/earshot-frame-install.py \
+             frame/install/earshot-tetherd.service frame/install/earshot-steamui.service "${d}/"
+          # The helper and the Phone tab (frame/menu): every file there except tests, flat.
+          if [ -d frame/menu ]; then
+            find frame/menu -maxdepth 1 -type f ! -name 'test_*' -exec cp {} "${d}/" \;
+          fi
+          for need in earshot-steamui.py earshot-menu.js; do
+            [ -f "${d}/${need}" ] || echo "::warning::frame/menu/${need} is not on this branch yet; the package has no Phone tab"
+          done
+          cp LICENSE "${d}/LICENSE"
+          echo "${VER}" > "${d}/VERSION"
+          chmod 755 "${d}"/*.sh "${d}"/*.py
+          chmod 644 "${d}"/*.service "${d}/LICENSE" "${d}/VERSION"
+          {
+            echo "Earshot for the Steam Frame ${VER}: installer, services and Phone tab."
+            echo
+            echo "Licence: MIT (see LICENSE). These files are their own source code."
+            echo "  repository: ${SERVER_URL}/${REPOSITORY}"
+            echo "  commit:     ${COMMIT_SHA}"
+            echo "  tree:       ${SERVER_URL}/${REPOSITORY}/tree/${COMMIT_SHA}/frame"
+            echo "  built by:   ${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          } > "${d}/SOURCE.txt"
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" \
+              -C dist -czf "out/${name}-${VER}.tar.gz" "${name}"
+          cp frame/install/earshot-frame-install.py frame/install/Install-Earshot.desktop \
+             frame/install/Uninstall-Earshot.desktop out/
+          (cd out && sha256sum "${name}-${VER}.tar.gz" earshot-frame-install.py Install-Earshot.desktop Uninstall-Earshot.desktop > earshot-frame.sha256)
+          cat out/earshot-frame.sha256
+          tar -tzvf "out/${name}-${VER}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: earshot-frame
+          path: out/*
+          retention-days: 30
+          if-no-files-found: error
+
+  # The headless engine. Nothing is installed from SteamOS's side: what the binary needs
+  # is checked against SYSTEM_LIBS above.
+  engine:
+    name: Engine (aarch64, headless)
+    needs: version
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      VER: ${{ needs.version.outputs.ver }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Only what tetherd needs for Bluetooth messages, notifications and calls: glib/gio
+      # (D-Bus to BlueZ and obexd) and OpenSSL. No Wayland, Avahi, libsecret, libnotify,
+      # GTK, camera, extensions or tests. git: CMake fetches nlohmann/json at configure time.
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ make pkg-config git ca-certificates \
+            libssl-dev libglib2.0-dev gettext patchelf file binutils
+          uname -m
+          ldd --version | head -n1
+          g++ --version | head -n1
+          cmake --version | head -n1
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DTETHER_VERSION="${VER}" \
+            -DBUILD_TESTING=OFF \
+            -DTETHER_WAYLAND=OFF -DTETHER_MDNS=OFF -DTETHER_LIBSECRET=OFF -DTETHER_LIBNOTIFY=OFF \
+            -DTETHER_BUILD_GTK=OFF -DTETHER_BUILD_TUI=OFF \
+            -DTETHER_CAMERA=OFF -DTETHER_BUILD_EXTENSIONS=OFF
+
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)" --target tetherd tether_cli
+
+      - name: Assemble dist/
+        env:
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -eu
+          rm -rf dist && mkdir -p dist/earshot-engine/lib
+          d=dist/earshot-engine
+          cp build/tetherd build/tether "${d}/"
+          strip --strip-unneeded "${d}/tetherd" "${d}/tether"
+
+          # Bundle every library the engine links that SteamOS does not ship, and what those
+          # need in turn. Expected to bundle nothing today; the loop is here so that a future
+          # dependency fails safe (bundled) instead of silently missing on the headset.
+          : > "${d}/lib/.bundled"
+          for round in 1 2 3 4 5 6; do
+            added=0
+            for f in "${d}/tetherd" "${d}/tether" "${d}"/lib/*.so*; do
+              [ -e "${f}" ] || continue
+              while read -r soname path; do
+                [ -n "${path}" ] && [ -f "${path}" ] || continue
+                stem="${soname%%.so*}"
+                if printf '%s\n' "${stem}" | grep -Eq "^(${SYSTEM_LIBS})$"; then continue; fi
+                if [ ! -e "${d}/lib/${soname}" ]; then
+                  cp -L "${path}" "${d}/lib/${soname}"
+                  echo "${soname}" >> "${d}/lib/.bundled"
+                  echo "bundled ${soname} (from ${path})"
+                  added=1
+                fi
+              done < <(ldd "${f}" | awk '/=>/ && $3 ~ /^\// {print $1, $3}')
+            done
+            [ "${added}" = 0 ] && break
+          done
+          # Single quotes: the literal text $ORIGIN/lib must reach patchelf.
+          patchelf --set-rpath '$ORIGIN/lib' "${d}/tetherd" "${d}/tether"
+          for l in "${d}"/lib/*.so*; do
+            [ -e "${l}" ] || continue
+            strip --strip-unneeded "${l}"
+            patchelf --set-rpath '$ORIGIN' "${l}"
+          done
+          if [ ! -s "${d}/lib/.bundled" ]; then
+            echo "nothing needed bundling: every library is in the SteamOS baseline"
+          fi
+          rm -f "${d}/lib/.bundled"
+          rmdir "${d}/lib" 2>/dev/null || true   # kept only when something was bundled
+
+          cp LICENSE "${d}/LICENSE"
+          echo "${VER}" > "${d}/VERSION"
+          {
+            echo "Earshot engine ${VER}: tetherd and tether, built headless (aarch64)."
+            echo "A fork of Tether (https://github.com/zackb/tether, MIT)."
+            echo
+            echo "  repository: ${SERVER_URL}/${REPOSITORY}"
+            echo "  commit:     ${COMMIT_SHA}"
+            echo "  tree:       ${SERVER_URL}/${REPOSITORY}/tree/${COMMIT_SHA}"
+            echo "  built by:   ${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+            echo "  build:      .github/workflows/earshot-arm64.yml in that commit"
+            echo "  options:    TETHER_WAYLAND=OFF TETHER_MDNS=OFF TETHER_LIBSECRET=OFF TETHER_LIBNOTIFY=OFF"
+            echo "              TETHER_BUILD_GTK=OFF TETHER_BUILD_TUI=OFF TETHER_CAMERA=OFF"
+            echo
+            if [ -d "${d}/lib" ]; then
+              echo "Bundled in lib/ (dynamically linked, replaceable):"
+              ls "${d}/lib" | sed 's/^/  /'
+            else
+              echo "No libraries are bundled: everything it links is part of SteamOS."
+            fi
+            echo "Statically linked from sources fetched by CMake: nlohmann/json (MIT)."
+          } > "${d}/SOURCE.txt"
+          cat "${d}/SOURCE.txt"
+          ls -lR dist
+
+      - name: Verify dist/ (ldd must show nothing missing)
+        run: |
+          set -u
+          fail() { echo "::error::verify failed: $*"; exit 1; }
+          unset LD_LIBRARY_PATH
+          d=dist/earshot-engine
+          report="${RUNNER_TEMP}/engine-ldd-report.txt"
+          : > "${report}"
+          for bin in "${d}/tetherd" "${d}/tether"; do
+            echo "=== ${bin}" | tee -a "${report}"
+            desc="$(file -b "${bin}")"
+            echo "${desc}" | tee -a "${report}"
+            [[ "${desc}" == *"ELF 64-bit"* && "${desc}" == *"ARM aarch64"* ]] || fail "${bin} is not ELF ARM aarch64"
+            [[ "${desc}" == *"stripped"* && "${desc}" != *"not stripped"* ]] || fail "${bin} is not stripped"
+
+            dyn="$(readelf -d "${bin}")"
+            rp="$(grep -E '\((RPATH|RUNPATH)\)' <<<"${dyn}" || true)"
+            echo "${rp}" | tee -a "${report}"
+            [[ "$(wc -l <<<"${rp}")" -eq 1 && "${rp}" == *'[$ORIGIN/lib]' ]] || fail 'RUNPATH is not exactly $ORIGIN/lib'
+
+            echo "--- needed (what the Frame must provide, or lib/ does)" | tee -a "${report}"
+            grep -E '\(NEEDED\)' <<<"${dyn}" | sed 's/.*Shared library: //' | tee -a "${report}"
+
+            echo "--- ldd" | tee -a "${report}"
+            out="$(ldd "${bin}")"
+            echo "${out}" | tee -a "${report}"
+            if grep -q 'not found' <<<"${out}"; then fail "unresolved library for ${bin}"; fi
+
+            # Everything resolved outside dist/ must be a SteamOS baseline library; anything
+            # else would be a library the headset may not have.
+            while read -r soname path; do
+              case "${path}" in "$(pwd)"/dist/*|dist/*) continue ;; esac
+              stem="${soname%%.so*}"
+              printf '%s\n' "${stem}" | grep -Eq "^(${SYSTEM_LIBS})$" || fail "${bin} needs ${soname}, which is neither bundled nor in the SteamOS baseline"
+            done < <(awk '/=>/ && $3 ~ /^\// {print $1, $3}' <<<"${out}")
+          done
+
+          echo "--- highest versions required" | tee -a "${report}"
+          maxver() {  # $1 = prefix (GLIBC, GLIBCXX), rest = files
+            local p="$1"; shift
+            { objdump -T "$@" 2>/dev/null | grep -o "${p}_[0-9][0-9.]*" || true; } | sed "s/^${p}_//" | sort -uV | tail -n1
+          }
+          glibc="$(maxver GLIBC "${d}/tetherd" "${d}/tether")"
+          glibcxx="$(maxver GLIBCXX "${d}/tetherd" "${d}/tether")"
+          echo "GLIBC_${glibc}  GLIBCXX_${glibcxx}" | tee -a "${report}"
+          [[ -n "${glibc}" && -n "${glibcxx}" ]] || fail "could not read the symbol versions"
+          [[ "$(printf '%s\n' "${glibc}" "${MAX_GLIBC}" | sort -V | tail -n1)" == "${MAX_GLIBC}" ]] || fail "needs glibc ${glibc}, above SteamOS's ${MAX_GLIBC}"
+          [[ "$(printf '%s\n' "${glibcxx}" "${MAX_GLIBCXX}" | sort -V | tail -n1)" == "${MAX_GLIBCXX}" ]] || fail "needs GLIBCXX ${glibcxx}, above ${MAX_GLIBCXX}"
+
+          echo "--- the headless build has none of the desktop libraries" | tee -a "${report}"
+          for bad in wayland avahi secret notify gtk gdk pipewire avcodec; do
+            if readelf -d "${d}/tetherd" "${d}/tether" | grep -qi "Shared library: \[lib${bad}"; then fail "links lib${bad}"; fi
+          done
+          echo ok | tee -a "${report}"
+
+          echo "--- runs" | tee -a "${report}"
+          "${d}/tether" --version | tee -a "${report}"
+          {
+            echo "### Earshot engine (aarch64, headless)"
+            echo "- highest GLIBC required: ${glibc} (SteamOS has ${MAX_GLIBC}); GLIBCXX ${glibcxx}"
+            echo "- bundled libraries: $(ls "${d}/lib" 2>/dev/null | tr '\n' ' ')$([ -d "${d}/lib" ] || echo none)"
+            echo '- needed from the Frame:'
+            echo '```'
+            readelf -d "${d}/tetherd" "${d}/tether" | grep -E '\(NEEDED\)' | sed 's/.*Shared library: //' | sort -u
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          cp "${report}" dist/engine-ldd-report.txt
+
+      # Informational only: no BlueZ or D-Bus session here, so tetherd cannot reach
+      # Bluetooth; what matters is that it starts, the loader finds everything, and it logs
+      # that it is running without Bluetooth rather than dying.
+      - name: Smoke run (non-fatal)
+        continue-on-error: true
+        run: |
+          unset LD_LIBRARY_PATH
+          export HOME="${RUNNER_TEMP}/home" XDG_RUNTIME_DIR="${RUNNER_TEMP}/run" TETHER_LOG_STDERR=1
+          mkdir -p "${HOME}" "${XDG_RUNTIME_DIR}"
+          chmod 700 "${XDG_RUNTIME_DIR}"
+          set +e
+          timeout 8 ./dist/earshot-engine/tetherd > "${RUNNER_TEMP}/smoke.log" 2>&1
+          echo "exit code: $? (124 = still running when stopped, which is fine)"
+          cat "${RUNNER_TEMP}/smoke.log"
+          exit 0
+
+      - name: Package
+        run: |
+          mkdir -p out
+          name="earshot-engine-${VER}-aarch64"
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" \
+              -C dist -czf "out/${name}.tar.gz" earshot-engine
+          cp dist/engine-ldd-report.txt out/
+          (cd out && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          ls -l out
+          cat "out/${name}.tar.gz.sha256"
+          tar -tzvf "out/${name}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: earshot-engine
+          path: out/*
+          retention-days: 30
+          if-no-files-found: error
+
+  # DISABLED. Signs both tarballs and drafts a release. Not enabled until the maintainer
+  # has made the release key pair. To turn it on:
+  #   1. make an ed25519 key pair; keep the private seed offline;
+  #   2. add the seed as the repository secret EARSHOT_RELEASE_KEY (a '#' comment line, then
+  #      base64 of the 32-byte seed, as Tragus does);
+  #   3. paste the base64 PUBLIC key into EARSHOT_RELEASE_PUBKEY below and into PUBKEY in
+  #      frame/install/earshot-frame-install.py (the installer refuses to run without it);
+  #   4. add a tag trigger above (tags: ['v*']), remove "if: false", then push a tag.
+  # It creates a DRAFT only: nothing is public until a person publishes it.
+  release:
+    name: Sign and draft release (disabled)
+    if: false # TODO(Jim): enable once the signing key exists, see the steps above
+    needs: [version, frame, engine]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VER: ${{ needs.version.outputs.ver }}
+    steps:
+      - name: Download the engine
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: earshot-engine
+          path: out
+      - name: Download the Frame package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: earshot-frame
+          path: out
+
+      # ed25519 signature over the exact tarball bytes. The public key is pinned here and
+      # checked against the secret, so a wrong or rotated secret fails the job.
+      - name: Sign the tarballs
+        env:
+          EARSHOT_RELEASE_KEY: ${{ secrets.EARSHOT_RELEASE_KEY }}
+          EARSHOT_RELEASE_PUBKEY: 'TODO-paste-the-base64-public-key-here'
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/sign"
+          "${RUNNER_TEMP}/sign/bin/pip" install --quiet 'cryptography==44.0.0'
+          "${RUNNER_TEMP}/sign/bin/python" - "out/earshot-engine-${VER}-aarch64.tar.gz" "out/earshot-frame-${VER}.tar.gz" <<'PY'
+          import base64, os, sys
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+          from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+          lines = [l.strip() for l in os.environ.get("EARSHOT_RELEASE_KEY", "").splitlines()]
+          lines = [l for l in lines if l and not l.startswith("#")]
+          if len(lines) != 1:
+              sys.exit("EARSHOT_RELEASE_KEY: expected one base64 seed line after the comment")
+          seed = base64.b64decode(lines[0], validate=True)
+          if len(seed) != 32:
+              sys.exit("EARSHOT_RELEASE_KEY: seed is not 32 bytes")
+          key = Ed25519PrivateKey.from_private_bytes(seed)
+          pub = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+          if base64.b64encode(pub).decode() != os.environ["EARSHOT_RELEASE_PUBKEY"]:
+              sys.exit("EARSHOT_RELEASE_KEY does not match the pinned public key")
+          for path in sys.argv[1:]:
+              data = open(path, "rb").read()
+              sig = key.sign(data)
+              Ed25519PublicKey.from_public_bytes(pub).verify(sig, data)
+              with open(path + ".sig", "w") as out:
+                  out.write(base64.b64encode(sig).decode())
+                  out.write(chr(10))
+              print("signed", path, "and verified with the pinned public key")
+          PY
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd out
+          sha256sum -c earshot-frame.sha256 "earshot-engine-${VER}-aarch64.tar.gz.sha256"
+          printf 'Earshot %s for the Steam Frame. Install: see the README.\n' "${TAG}" > notes.md
+          gh release create "${TAG}" --repo "${REPO}" --draft --verify-tag \
+            --title "Earshot ${TAG}" --notes-file notes.md \
+            "earshot-engine-${VER}-aarch64.tar.gz" "earshot-engine-${VER}-aarch64.tar.gz.sig" \
+            "earshot-frame-${VER}.tar.gz" "earshot-frame-${VER}.tar.gz.sig" \
+            earshot-frame-install.py Install-Earshot.desktop Uninstall-Earshot.desktop \
+            earshot-frame.sha256 engine-ldd-report.txt

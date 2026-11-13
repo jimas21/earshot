@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Install Earshot
+Comment=Installs or updates Earshot (iPhone calls, texts and notifications) on this Steam Frame
+Icon=system-software-install
+Exec=konsole --hold -e python3 -I -c "import sys,urllib.request as u; sys.excepthook=lambda *e: print('Could not download the Earshot installer. Check that the headset is online, then try again.'); exec(u.urlopen('https://github.com/jimas21/earshot/releases/latest/download/earshot-frame-install.py', timeout=60).read())"
+Terminal=false
