@@ -74,6 +74,9 @@ target_link_libraries(tether PUBLIC
     OpenSSL::Crypto
     PkgConfig::AVAHI
     PkgConfig::GLIB
-    PkgConfig::SECRET
     Intl::Intl
 )
+if(TETHER_LIBSECRET)
+    target_link_libraries(tether PUBLIC PkgConfig::SECRET)
+    target_compile_definitions(tether PRIVATE TETHER_LIBSECRET)
+endif()
