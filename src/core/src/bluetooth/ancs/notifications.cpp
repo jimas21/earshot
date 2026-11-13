@@ -246,6 +246,7 @@ namespace tether::bluetooth::ancs {
             {"category", static_cast<int>(notification.category)},
             {"timestamp", notification.received},
             {"silent", notification.silent},
+            {"pre_existing", notification.pre_existing},
             {"positive_action", notification.has_positive_action},
             {"negative_action", notification.has_negative_action},
         };
