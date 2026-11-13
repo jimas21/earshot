@@ -11,6 +11,7 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <sys/timerfd.h>
 #include <tether/audio.hpp>
@@ -76,6 +77,23 @@ static uint16_t listen_port() {
     return ec == std::errc() && end == text.data() + text.size() ? port : 0;
 }
 
+// Address for the TCP listener from TETHER_BIND (numeric IPv4 or IPv6), else every interface.
+static std::string listen_bind_address() {
+    const char* value = std::getenv("TETHER_BIND");
+    return value ? value : "";
+}
+
+// TETHER_NO_TCP=1 runs without the TCP/mTLS listener: no Wi-Fi pairing or transfers, no mDNS
+// advertising, and no LAN address offered to the phone. Bluetooth features are unaffected.
+static bool tcp_disabled() {
+    const char* value = std::getenv("TETHER_NO_TCP");
+    return value && std::string_view(value) == "1";
+}
+
+static bool is_loopback_address(const std::string& address) {
+    return address == "::1" || address == "localhost" || address.rfind("127.", 0) == 0;
+}
+
 // How long to let the phone finish with the buds before reclaiming them.
 constexpr int HANDOFF_SETTLE_SECONDS = 2;
 constexpr int HANDOFF_RECLAIM_ATTEMPTS = 3;
@@ -111,13 +129,17 @@ int main(int argc, char** argv) {
     tether::EpollEventLoop loop;
     g_loop = &loop;
 
+    const bool tcp_enabled = !tcp_disabled();
+    const std::string bind_address = listen_bind_address();
+    // Other machines can only reach, and so only be told about, a listener that is not loopback-only.
+    const bool lan_visible = tcp_enabled && !is_loopback_address(bind_address);
     const uint16_t port = listen_port();
-    if (port == 0) {
+    if (tcp_enabled && port == 0) {
         debug::log(ERR, "Invalid TETHER_PORT: {}", std::getenv("TETHER_PORT"));
         return 1;
     }
 
-    tether::TcpServer tcp_srv(loop, port);
+    tether::TcpServer tcp_srv(loop, port, bind_address);
 #ifdef TETHER_CAMERA
     if (tether::camera_supported())
         tcp_srv.set_camera_handler(tether::start_camera_stream);
@@ -130,7 +152,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (!tcp_srv.start()) {
+    if (!tcp_enabled) {
+        debug::log(INFO, "TETHER_NO_TCP=1: not listening for TCP connections");
+    } else if (!tcp_srv.start()) {
         debug::log(ERR, "Failed to start TCP server");
         return 1;
     }
@@ -140,7 +164,7 @@ int main(int argc, char** argv) {
 
     // Advertise this daemon on the local network via mDNS
     tether::Discovery discovery;
-    {
+    if (lan_visible) {
         std::string my_fp = tether::Crypto::instance().get_my_fingerprint();
 
         discovery.set_state_callback([](bool available) { tether::set_mdns_available(available); });
@@ -236,7 +260,7 @@ int main(int argc, char** argv) {
         });
     });
 
-    if (notifier_ready) {
+    if (notifier_ready && lan_visible) {
         int mdns_warn_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
         if (mdns_warn_fd >= 0) {
             itimerspec spec{};
@@ -677,13 +701,16 @@ int main(int argc, char** argv) {
     const auto place_lan_info = [&bluez, &lan_info]() {
         const auto snapshot = bluez.snapshot();
         const auto* adapter = tether::bluetooth::preferred_adapter(snapshot, bluez.preferred_adapter_id());
-        lan_info->set_adapter(adapter ? adapter->path : std::string{});
+        if (lan_info)
+            lan_info->set_adapter(adapter ? adapter->path : std::string{});
     };
 
     if (bluez.start()) {
         tether::bluetooth::g_bluez = &bluez;
-        lan_info.emplace(bluez, hostname, port, tether::Crypto::instance().get_my_fingerprint());
-        place_lan_info();
+        if (lan_visible) {
+            lan_info.emplace(bluez, hostname, port, tether::Crypto::instance().get_my_fingerprint());
+            place_lan_info();
+        }
         tether::bluetooth::g_airpods = &airpods;
         tether::g_media = &media;
         media.watch(on_local_play);

@@ -144,8 +144,9 @@ namespace tether {
 
     class TcpServer {
     public:
-        // bind_port = 0 binds to any available port
-        TcpServer(EpollEventLoop& loop, int bind_port = 5134);
+        // bind_port = 0 binds to any available port. bind_address is a numeric IPv4 or IPv6
+        // address to listen on; empty listens on every interface.
+        TcpServer(EpollEventLoop& loop, int bind_port = 5134, std::string bind_address = {});
         ~TcpServer();
 
         bool start();
@@ -203,6 +204,7 @@ namespace tether {
         EpollEventLoop& loop_;
         int server_fd_ = -1;
         int bind_port_;
+        std::string bind_address_;
         std::map<int, std::string> client_buffers_;
         std::map<int, ClipboardImageReceiver> clipboard_images_;
         std::map<int, SSL*> active_ssl_;

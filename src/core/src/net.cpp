@@ -1862,12 +1862,14 @@ namespace tether {
 
     // --- TcpServer ---
 
-    TcpServer::TcpServer(EpollEventLoop& loop, int bind_port) : loop_(loop), bind_port_(bind_port) {}
+    TcpServer::TcpServer(EpollEventLoop& loop, int bind_port, std::string bind_address)
+        : loop_(loop), bind_port_(bind_port), bind_address_(std::move(bind_address)) {}
 
     TcpServer::~TcpServer() { stop(); }
 
-    // Binds and listens on the wildcard address of `family`. AF_INET6 socket dual-stack.
-    static int bind_listen_socket(int family, int port) {
+    // Binds and listens on `address` (numeric) of `family`, or on the wildcard address when it
+    // is empty. A wildcard AF_INET6 socket is dual-stack; a specific address is not.
+    static int bind_listen_socket(int family, int port, const std::string& address) {
         // CLOEXEC: the pairing dialog is fork+exec'd from this process and must
         // not inherit the listening socket, or it keeps the port bound and
         // SO_REUSEPORT hands it connections it will never accept.
@@ -1887,8 +1889,8 @@ namespace tether {
         sockaddr_storage ss{};
         socklen_t len = 0;
         if (family == AF_INET6) {
-            int off = 0;
-            if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off)) < 0) {
+            int v6only = address.empty() ? 0 : 1;
+            if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0) {
                 int err = errno;
                 close(fd);
                 errno = err;
@@ -1897,12 +1899,22 @@ namespace tether {
             auto* a6 = reinterpret_cast<sockaddr_in6*>(&ss);
             a6->sin6_family = AF_INET6;
             a6->sin6_addr = in6addr_any;
+            if (!address.empty() && inet_pton(AF_INET6, address.c_str(), &a6->sin6_addr) != 1) {
+                close(fd);
+                errno = EINVAL;
+                return -1;
+            }
             a6->sin6_port = htons(port);
             len = sizeof(*a6);
         } else {
             auto* a4 = reinterpret_cast<sockaddr_in*>(&ss);
             a4->sin_family = AF_INET;
             a4->sin_addr.s_addr = INADDR_ANY;
+            if (!address.empty() && inet_pton(AF_INET, address.c_str(), &a4->sin_addr) != 1) {
+                close(fd);
+                errno = EINVAL;
+                return -1;
+            }
             a4->sin_port = htons(port);
             len = sizeof(*a4);
         }
@@ -1919,19 +1931,33 @@ namespace tether {
 
     bool TcpServer::start() {
         bool dual_stack = true;
-        server_fd_ = bind_listen_socket(AF_INET6, bind_port_);
-        if (server_fd_ < 0) {
+        if (!bind_address_.empty()) {
+            // A specific address picks its own family.
             dual_stack = false;
-            server_fd_ = bind_listen_socket(AF_INET, bind_port_);
+            const int family = bind_address_.find(':') != std::string::npos ? AF_INET6 : AF_INET;
+            server_fd_ = bind_listen_socket(family, bind_port_, bind_address_);
+        } else {
+            server_fd_ = bind_listen_socket(AF_INET6, bind_port_, bind_address_);
+            if (server_fd_ < 0) {
+                dual_stack = false;
+                server_fd_ = bind_listen_socket(AF_INET, bind_port_, bind_address_);
+            }
         }
 
         if (server_fd_ < 0) {
-            debug::log(ERR, "Failed to listen on tcp port {}: {}", bind_port_, std::strerror(errno));
+            debug::log(ERR,
+                       "Failed to listen on tcp {}:{}: {}",
+                       bind_address_.empty() ? "port" : bind_address_,
+                       bind_port_,
+                       std::strerror(errno));
             return false;
         }
 
         loop_.addFd(server_fd_, [this](int fd) { handle_accept(fd); });
-        debug::log(INFO, "TcpServer listening on {}:{}", dual_stack ? "[::]" : "0.0.0.0", bind_port_);
+        debug::log(INFO,
+                   "TcpServer listening on {}:{}",
+                   bind_address_.empty() ? (dual_stack ? "[::]" : "0.0.0.0") : bind_address_,
+                   bind_port_);
         return true;
     }
 

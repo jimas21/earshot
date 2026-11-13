@@ -122,6 +122,23 @@ Set `TETHER_LOG_STDERR=1` for the daemon to keep logs on stderr instead of
 redirecting nonterminal output into its state-directory log. Only the exact value
 `1` enables either option; defaults for desktop/package installations are unchanged.
 
+## Which network interfaces listen
+
+By default `tetherd` listens for TCP (mTLS) connections on port 5134 on every
+interface, advertises itself over mDNS, and tells a bonded phone its LAN address
+over Bluetooth. Two environment variables narrow that; the defaults are unchanged:
+
+- `TETHER_BIND=<address>` listens only on that numeric IPv4 or IPv6 address, for
+  example `TETHER_BIND=127.0.0.1`. A loopback address also turns off the mDNS
+  advertisement and the LAN address offered to the phone, since no other machine
+  could use them.
+- `TETHER_NO_TCP=1` does not open the TCP listener at all (and, with it, no mDNS
+  advertisement and no LAN address). Wi-Fi pairing and transfers need the listener
+  and are unavailable; everything over Bluetooth (messages, notifications, calls,
+  contacts) works as before. Only the exact value `1` enables it.
+
+`TETHER_PORT` still chooses the port when a listener is opened.
+
 An absolute, nonempty `XDG_DOWNLOAD_DIR` overrides the normal GLib/HOME download
 lookup. Received files are recorded for status/subscribers independently of desktop
 notifications. With no Wayland display, pairing waits for CLI approval; failure to
