@@ -1,8 +1,10 @@
 #include "tether/bluetooth/hfp_profile.hpp"
 #include "tether/bluetooth/monitor.hpp"
+#include "tether/bluetooth/objects.hpp"
 #include "tether/log.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <gio/gio.h>
 #include <mutex>
 
@@ -66,7 +68,74 @@ namespace tether::bluetooth {
             return false;
         }
 
+        // Whether PipeWire's telephony service is running in this user's session.
+        bool pipewire_telephony_present() {
+            GError* error = nullptr;
+            GDBusConnection* bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &error);
+            if (!bus) {
+                g_clear_error(&error);
+                return false;
+            }
+            GVariant* reply = g_dbus_connection_call_sync(bus,
+                                                          "org.freedesktop.DBus",
+                                                          "/org/freedesktop/DBus",
+                                                          "org.freedesktop.DBus",
+                                                          "NameHasOwner",
+                                                          g_variant_new("(s)", "org.pipewire.Telephony"),
+                                                          G_VARIANT_TYPE("(b)"),
+                                                          G_DBUS_CALL_FLAGS_NONE,
+                                                          1000,
+                                                          nullptr,
+                                                          &error);
+            bool present = false;
+            if (reply) {
+                gboolean owned = FALSE;
+                g_variant_get(reply, "(b)", &owned);
+                present = owned;
+                g_variant_unref(reply);
+            }
+            g_clear_error(&error);
+            g_object_unref(bus);
+            return present;
+        }
+
+        // Caller holds g_mutex.
+        void release_locked(BluezMonitor& monitor) {
+            GDBusConnection* conn = monitor.connection();
+            if (!conn || !g_registered)
+                return;
+            GError* error = nullptr;
+            GVariant* reply = g_dbus_connection_call_sync(conn,
+                                                          "org.bluez",
+                                                          "/org/bluez",
+                                                          "org.bluez.ProfileManager1",
+                                                          "UnregisterProfile",
+                                                          g_variant_new("(o)", PROFILE_PATH),
+                                                          nullptr,
+                                                          G_DBUS_CALL_FLAGS_NONE,
+                                                          5000,
+                                                          nullptr,
+                                                          &error);
+            if (reply)
+                g_variant_unref(reply);
+            g_clear_error(&error);
+            monitor.invoke_sync([&] {
+                if (g_registration_id)
+                    g_dbus_connection_unregister_object(conn, g_registration_id);
+                g_registration_id = 0;
+            });
+            g_registered = false;
+        }
+
     } // namespace
+
+    HandsfreeStub decide_handsfree_stub(const HandsfreeSources& sources) {
+        const bool someone_else =
+            sources.pipewire_telephony || (!sources.ours_registered && sources.adapter_lists_hfp);
+        if (sources.ours_registered)
+            return someone_else ? HandsfreeStub::Withdraw : HandsfreeStub::Keep;
+        return someone_else ? HandsfreeStub::Leave : HandsfreeStub::Register;
+    }
 
     bool ensure_handsfree_record(BluezMonitor& monitor, std::string& how) {
         GDBusConnection* conn = monitor.connection();
@@ -75,13 +144,27 @@ namespace tether::bluetooth {
             return false;
         }
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (g_registered) {
+
+        HandsfreeSources sources;
+        sources.ours_registered = g_registered;
+        sources.adapter_lists_hfp = adapter_offers_handsfree(monitor);
+        sources.pipewire_telephony = pipewire_telephony_present();
+        const bool pipewire = sources.pipewire_telephony;
+
+        switch (decide_handsfree_stub(sources)) {
+        case HandsfreeStub::Keep:
             how = "registered";
             return true;
-        }
-        if (adapter_offers_handsfree(monitor)) {
-            how = "present";
+        case HandsfreeStub::Withdraw:
+            release_locked(monitor);
+            debug::log(INFO, "bluetooth: withdrew the placeholder Hands-Free record; PipeWire telephony provides it");
+            how = pipewire ? "pipewire" : "present";
             return true;
+        case HandsfreeStub::Leave:
+            how = pipewire ? "pipewire" : "present";
+            return true;
+        case HandsfreeStub::Register:
+            break;
         }
 
         GError* error = nullptr;
@@ -140,31 +223,24 @@ namespace tether::bluetooth {
     }
 
     void release_handsfree_record(BluezMonitor& monitor) {
-        GDBusConnection* conn = monitor.connection();
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (!conn || !g_registered)
+        release_locked(monitor);
+    }
+
+    void reconcile_handsfree_record(BluezMonitor& monitor) {
+        if (!no_root_mode())
             return;
-        GError* error = nullptr;
-        GVariant* reply = g_dbus_connection_call_sync(conn,
-                                                      "org.bluez",
-                                                      "/org/bluez",
-                                                      "org.bluez.ProfileManager1",
-                                                      "UnregisterProfile",
-                                                      g_variant_new("(o)", PROFILE_PATH),
-                                                      nullptr,
-                                                      G_DBUS_CALL_FLAGS_NONE,
-                                                      5000,
-                                                      nullptr,
-                                                      &error);
-        if (reply)
-            g_variant_unref(reply);
-        g_clear_error(&error);
-        monitor.invoke_sync([&] {
-            if (g_registration_id)
-                g_dbus_connection_unregister_object(conn, g_registration_id);
-            g_registration_id = 0;
-        });
-        g_registered = false;
+        static std::mutex throttle_mutex;
+        static std::chrono::steady_clock::time_point next_check{};
+        {
+            std::lock_guard<std::mutex> lock(throttle_mutex);
+            const auto now = std::chrono::steady_clock::now();
+            if (now < next_check)
+                return;
+            next_check = now + std::chrono::seconds(10);
+        }
+        std::string how;
+        ensure_handsfree_record(monitor, how);
     }
 
 } // namespace tether::bluetooth

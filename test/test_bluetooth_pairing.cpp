@@ -4,6 +4,7 @@
 #include <sys/wait.h>
 #include <tether/bluetooth/agent.hpp>
 #include <tether/bluetooth/config.hpp>
+#include <tether/bluetooth/hfp_profile.hpp>
 #include <tether/bluetooth/pairing.hpp>
 
 using namespace tether::bluetooth;
@@ -257,4 +258,30 @@ TEST(PairResultJson, ReportsTheStrategyThatBonded) {
 
     result.auth_strategy_used = AuthStrategy::ConnectFirst;
     EXPECT_EQ(to_json(result)["auth_strategy_used"], "connect-first");
+}
+
+// The placeholder Hands-Free record must never sit in the way of PipeWire's telephony, which needs the phone's
+// HFP connection.
+TEST(HandsfreeStub, RegistersOnlyWhenNobodyProvidesHandsFree) {
+    EXPECT_EQ(decide_handsfree_stub({false, false, false}), HandsfreeStub::Register);
+}
+
+TEST(HandsfreeStub, DoesNotRegisterWhenPipeWireTelephonyIsUp) {
+    EXPECT_EQ(decide_handsfree_stub({false, false, true}), HandsfreeStub::Leave);
+    EXPECT_EQ(decide_handsfree_stub({false, true, true}), HandsfreeStub::Leave);
+}
+
+TEST(HandsfreeStub, DoesNotRegisterWhenTheAdapterAlreadyListsHandsFree) {
+    EXPECT_EQ(decide_handsfree_stub({false, true, false}), HandsfreeStub::Leave);
+}
+
+TEST(HandsfreeStub, WithdrawsWhenPipeWireTelephonyAppearsLater) {
+    // Our own record is what puts the UUID on the adapter, so only PipeWire can make it step aside.
+    EXPECT_EQ(decide_handsfree_stub({true, true, true}), HandsfreeStub::Withdraw);
+    EXPECT_EQ(decide_handsfree_stub({true, false, true}), HandsfreeStub::Withdraw);
+}
+
+TEST(HandsfreeStub, KeepsItsOwnRecordWhileNobodyElseWantsTheRole) {
+    EXPECT_EQ(decide_handsfree_stub({true, true, false}), HandsfreeStub::Keep);
+    EXPECT_EQ(decide_handsfree_stub({true, false, false}), HandsfreeStub::Keep);
 }

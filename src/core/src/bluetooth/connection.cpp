@@ -4,6 +4,7 @@
 #include "tether/bluetooth/config.hpp"
 #include "tether/bluetooth/contacts.hpp"
 #include "tether/bluetooth/groups.hpp"
+#include "tether/bluetooth/hfp_profile.hpp"
 #include "tether/bluetooth/journal.hpp"
 #include "tether/bluetooth/map_session.hpp"
 #include "tether/bluetooth/monitor.hpp"
@@ -1439,6 +1440,9 @@ namespace tether::bluetooth {
             supervise_away_lock(now, obex_up);
 
             supervise_ancs_solicitation(*monitor, should_solicit_ancs(ancs_enabled, bearer, now, ancs_absent_since));
+
+            // PipeWire telephony may start after us; our placeholder Hands-Free record must then step aside.
+            reconcile_handsfree_record(*monitor);
 
             // publish() drops a payload identical to the last one, so refreshing
             // every tick costs nothing and cannot miss a transition.
