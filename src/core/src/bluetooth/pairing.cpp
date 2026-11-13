@@ -962,6 +962,24 @@ namespace tether::bluetooth {
         }
     } // namespace
 
+    ListenAdvert listen_advert_action(bool phone_announced, bool advert_on_air) {
+        if (phone_announced)
+            return advert_on_air ? ListenAdvert::Stop : ListenAdvert::Hold;
+        return advert_on_air ? ListenAdvert::Hold : ListenAdvert::Start;
+    }
+
+    bool listen_bond_matches(bool paired,
+                             bool was_paired_before,
+                             bool is_target,
+                             bool target_unpaired_seen,
+                             bool confirmed) {
+        if (!paired || !is_target)
+            return false;
+        // A fresh bond on the target. A bond that predates the listen only counts once the target has been seen
+        // unpaired and the user has confirmed: until then it is the stale bond, not the one being made.
+        return !was_paired_before || (confirmed && target_unpaired_seen);
+    }
+
     PairResult listen_for_pair(BluezMonitor& monitor,
                                int seconds,
                                const ProgressFn& progress,
@@ -1043,7 +1061,9 @@ namespace tether::bluetooth {
         notify(progress, "listening", on_air ? "" : advert_err);
 
         const int64_t deadline = now_seconds() + std::max(1, seconds);
+        int64_t next_advert_try = on_air ? 0 : now_seconds() + SOLICIT_RETRY_SECONDS;
         bool announced = false;
+        bool target_unpaired_seen = false;
         bool found = false;
         Device bonded;
         std::string name;
@@ -1078,10 +1098,14 @@ namespace tether::bluetooth {
                     }
                 }
                 for (const auto& d : objects.devices) {
-                    const std::string address = normalize_address(d.address);
-                    const bool new_bond = d.paired && !was_paired.count(address);
-                    const bool rebond = d.paired && !target.empty() && d.path == target && answer == 1;
-                    if (new_bond || rebond) {
+                    const bool is_target = !target.empty() && d.path == target;
+                    if (is_target && !d.paired)
+                        target_unpaired_seen = true;
+                    if (listen_bond_matches(d.paired,
+                                            was_paired.count(normalize_address(d.address)) > 0,
+                                            is_target,
+                                            target_unpaired_seen,
+                                            answer == 1)) {
                         bonded = d;
                         found = true;
                         break;
@@ -1090,6 +1114,25 @@ namespace tether::bluetooth {
             }
             if (found)
                 break;
+
+            // Keep the advert in step with the pairing: off once a phone is pairing, back on if BlueZ's own
+            // timeout dropped it while nobody had come yet.
+            switch (listen_advert_action(announced, ancs_solicitation_active())) {
+            case ListenAdvert::Stop:
+                stop_advert(monitor);
+                break;
+            case ListenAdvert::Start:
+                if (now_seconds() >= next_advert_try) {
+                    std::string rearm_err;
+                    if (!start_advert(monitor, adapter, rearm_err)) {
+                        debug::log(WARN, "bluetooth: could not re-arm the ANCS advert while listening: {}", rearm_err);
+                        next_advert_try = now_seconds() + SOLICIT_RETRY_SECONDS;
+                    }
+                }
+                break;
+            case ListenAdvert::Hold:
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
 
@@ -1226,7 +1269,7 @@ namespace tether::bluetooth {
             }
             if (!get_adapter_bool(conn, adapter, "Discovering")) {
                 err = _("BlueZ is holding a discovery session that never ended, so scanning cannot start. "
-                        "Restart the Bluetooth service (sudo systemctl restart bluetooth) and try again.");
+                        "Turn Bluetooth off and on again in the system settings, or restart the device, and try again.");
                 return false;
             }
         }

@@ -61,7 +61,8 @@ namespace tether::bluetooth {
                            bool calls_enabled = false);
 
     // Phone-initiated pairing, which needs no experimental BlueZ and no root: the adapter is made discoverable and
-    // pairable for `seconds`, the ANCS solicitation stays on air, and the agent serves whichever phone asks first.
+    // pairable for `seconds`, the ANCS solicitation is on air until a phone connects (it goes off for the pairing
+    // and returns once the bond is made), and the agent serves whichever phone asks first.
     // The confirmation reaches `confirm` (the client that started the listen). Returns when the phone has bonded,
     // nobody came, the user declined, or `cancel` was set. Progress steps: listening, connecting (detail = the
     // phone's name), confirm, confirmed, paired, settling, soliciting. Status "timeout" means nobody connected.
@@ -72,6 +73,26 @@ namespace tether::bluetooth {
                                const ConfirmFn& confirm,
                                const std::atomic<bool>& cancel,
                                bool calls_enabled = false);
+
+    // What a listen should do with its ANCS solicitation advert on each poll. The advert must not be on air
+    // while the phone is pairing over Classic: an iPhone that sees it can bond LE-only, with no Classic half,
+    // and then MAP and PBAP never work. So it is up while nobody has shown up (re-armed if BlueZ's own
+    // timeout took it down before the listen window ended) and down from the moment a phone connects.
+    enum class ListenAdvert {
+        Start, // put it on air (again)
+        Stop,  // take it off air
+        Hold,  // leave it as it is
+    };
+    ListenAdvert listen_advert_action(bool phone_announced, bool advert_on_air);
+
+    // Whether a listen should take this device's bond as the new one it is waiting for. `target_unpaired_seen`
+    // says the target was observed unpaired at some point: a bond that was already there is not news. A
+    // bond on any device other than the one the agent is serving never counts.
+    bool listen_bond_matches(bool paired,
+                             bool was_paired_before,
+                             bool is_target,
+                             bool target_unpaired_seen,
+                             bool confirmed);
 
     // Removes the bond so a clean pairing can be retried.
     PairResult unpair_device(BluezMonitor& monitor, const std::string& address);

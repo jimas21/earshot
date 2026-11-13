@@ -260,6 +260,48 @@ TEST(PairResultJson, ReportsTheStrategyThatBonded) {
     EXPECT_EQ(to_json(result)["auth_strategy_used"], "connect-first");
 }
 
+// The advert that solicits ANCS must be off the air while a phone is pairing, and must come back if BlueZ's own
+// timeout dropped it before anyone arrived (a listen can outlast it).
+TEST(ListenAdvert, StaysUpWhileNobodyHasConnected) {
+    EXPECT_EQ(listen_advert_action(false, true), ListenAdvert::Hold);
+}
+
+TEST(ListenAdvert, ComesBackWhenBlueZDroppedItBeforeAnyoneConnected) {
+    EXPECT_EQ(listen_advert_action(false, false), ListenAdvert::Start);
+}
+
+TEST(ListenAdvert, GoesDownOnceAPhoneIsPairing) {
+    EXPECT_EQ(listen_advert_action(true, true), ListenAdvert::Stop);
+}
+
+TEST(ListenAdvert, StaysDownWhileAPhoneIsPairing) {
+    EXPECT_EQ(listen_advert_action(true, false), ListenAdvert::Hold);
+}
+
+TEST(ListenBond, ANewBondOnTheTargetCounts) {
+    EXPECT_TRUE(listen_bond_matches(true, false, true, false, false));
+}
+
+TEST(ListenBond, ABondOnAnotherDeviceNeverCounts) {
+    EXPECT_FALSE(listen_bond_matches(true, false, false, false, true));
+    EXPECT_FALSE(listen_bond_matches(true, true, false, true, true));
+}
+
+TEST(ListenBond, AnUnpairedDeviceNeverCounts) {
+    EXPECT_FALSE(listen_bond_matches(false, false, true, true, true));
+}
+
+// A bond that was already there is not the one being made; only an unpaired-then-paired target after the
+// user's confirmation is.
+TEST(ListenBond, AStaleBondDoesNotMatchJustBecauseTheUserConfirmed) {
+    EXPECT_FALSE(listen_bond_matches(true, true, true, false, true));
+    EXPECT_FALSE(listen_bond_matches(true, true, true, true, false));
+}
+
+TEST(ListenBond, ARebondNeedsThePairedTransitionAndTheConfirmation) {
+    EXPECT_TRUE(listen_bond_matches(true, true, true, true, true));
+}
+
 // The placeholder Hands-Free record must never sit in the way of PipeWire's telephony, which needs the phone's
 // HFP connection.
 TEST(HandsfreeStub, RegistersOnlyWhenNobodyProvidesHandsFree) {
