@@ -39,6 +39,35 @@ published; this is what it will do.
 5. Restart the headset once if it says so, then pair the iPhone and open the **Phone** tab
    in the quick menu.
 
+### What the first install trusts
+
+The button runs `earshot-frame-install.py` straight from the latest GitHub release, and
+that first download is **not signature-checked**: the installer carries the signing key
+that checks everything after it (the engine, the Phone tab and every update), so it cannot
+check itself. Trust at that moment rests on GitHub and on the repository owner's account.
+If that is not enough for you, check the installer before it runs:
+
+```sh
+curl -LO https://github.com/jimas21/earshot/releases/latest/download/earshot-frame-install.py
+sha256sum earshot-frame-install.py        # compare with the release notes and earshot-frame.sha256
+python3 -I -c "import re,base64,hashlib;k=re.search(r'^PUBKEY = \"([^\"]+)\"',open('earshot-frame-install.py').read(),re.M).group(1);print(hashlib.sha256(base64.b64decode(k)).hexdigest())"
+python3 earshot-frame-install.py          # then run it yourself instead of using the button
+```
+
+The third command prints the signing key's SHA-256 fingerprint; it should match
+`(published here with the first release)`. Every later download (engine, Phone tab, updates) is verified against that key before
+anything is unpacked.
+
+**The one root step** (BlueZ experimental mode, the Class of Device unit, L2CAP ERTM) runs
+a copy of the setup script made by root in a root-only folder, only after its SHA-256
+matches the value the installer recorded when it checked the release signature, using
+`/usr/bin/python3`. A program already running as your user could still replace both the
+script and that record, or sit in front of the password prompt; Earshot protects against a
+damaged or swapped file, not against a compromised account.
+
+Earshot's engine runs with `TETHER_NO_TCP=1`: nothing listens on the network (no
+5134/tcp, no mDNS); everything goes over Bluetooth.
+
 **Updates:** Earshot checks for updates itself (Phone tab, Settings, Updates). A failed
 update keeps the old install.
 **Remove:** open

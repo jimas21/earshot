@@ -301,5 +301,25 @@ class SystemSetupRootStepTests(unittest.TestCase):
         self.assertFalse(os.path.exists(mark), r.stdout + r.stderr)
 
 
+class DocsAndCiTests(unittest.TestCase):
+    ROOT = os.path.dirname(os.path.dirname(INSTALL))
+
+    def text(self, *parts):
+        with open(os.path.join(self.ROOT, *parts), encoding="utf-8") as f:
+            return f.read()
+
+    def test_readme_states_the_unsigned_first_download_and_how_to_check_it(self):
+        readme = self.text("frame", "README.md")
+        self.assertIn("not signature-checked", readme)
+        self.assertIn("sha256sum earshot-frame-install.py", readme)
+        self.assertIn("fingerprint", readme)
+
+    def test_ci_publishes_the_installer_checksum_and_names_no_person(self):
+        wf = self.text(".github", "workflows", "earshot-arm64.yml")
+        self.assertIn("SHA-256 of earshot-frame-install.py", wf)
+        self.assertIn("earshot-frame.sha256", wf)
+        self.assertNotIn("TODO(Jim)", wf)
+
+
 if __name__ == "__main__":
     unittest.main()

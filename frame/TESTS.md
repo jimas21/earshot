@@ -38,7 +38,19 @@ Use upstream's `tether-<version>-aarch64.AppImage` (needs glibc 2.38 or newer).
 7. Ring the phone from another phone; decline it from the Frame.
 8. Reboot the Frame and check the setup survived. After the next SteamOS update, check again.
 
-Pass: steps 5 to 8 work. Also note idle CPU and memory of `tetherd` (`top -p`).
+9. **Must verify (Earshot helper, hands-free hand-back).** With the helper running, take
+   the headset off (or set Priority to "Always phone") and ring the phone from another phone:
+   the phone must ring normally and `busctl --system introspect org.bluez <device path>`
+   must show no `telephony0` object. Put the headset on again (or set "Always Frame"). The
+   helper restores hands-free by dropping the BR/EDR bearer
+   (`org.bluez.Bearer.BREDR1 Disconnect`), because `ConnectProfile` returns success and does
+   nothing. Check that Phone tab, Settings shows "Calls: reconnecting..." and then "connected"
+   within about 45 s, that `telephony0` is back and that a call rings in the headset. If it
+   shows "The call link did not come back", the restore does not work on this stack: record
+   it in Results, then fix before release (the helper never reports a restore as done on its
+   own).
+
+Pass: steps 5 to 9 work. Also note idle CPU and memory of `tetherd` (`top -p`).
 
 ## 3. Pop-up over a running game
 

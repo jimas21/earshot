@@ -378,7 +378,7 @@ jobs:
   # It creates a DRAFT only: nothing is public until a person publishes it.
   release:
     name: Sign and draft release (disabled)
-    if: false # TODO(Jim): enable once the signing key exists, see the steps above
+    if: false # TODO(maintainer): enable once the signing key exists, see the steps above
     needs: [version, frame, engine]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -440,7 +440,10 @@ jobs:
         run: |
           cd out
           sha256sum -c earshot-frame.sha256 "earshot-engine-${VER}-aarch64.tar.gz.sha256"
-          printf 'Earshot %s for the Steam Frame. Install: see the README.\n' "${TAG}" > notes.md
+          # The first install downloads the installer unsigned (it carries the key that checks
+          # everything after it), so publish its checksum where it can be compared.
+          inst_sha="$(sha256sum earshot-frame-install.py | cut -d' ' -f1)"
+          printf 'Earshot %s for the Steam Frame. Install: see the README.\n\nSHA-256 of earshot-frame-install.py: %s\nAll checksums: earshot-frame.sha256\n' "${TAG}" "${inst_sha}" > notes.md
           gh release create "${TAG}" --repo "${REPO}" --draft --verify-tag \
             --title "Earshot ${TAG}" --notes-file notes.md \
             "earshot-engine-${VER}-aarch64.tar.gz" "earshot-engine-${VER}-aarch64.tar.gz.sig" \
