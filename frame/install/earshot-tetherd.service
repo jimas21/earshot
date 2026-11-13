@@ -1,0 +1,31 @@
+# Earshot's engine (tetherd) as a systemd --user service (installed by install.sh).
+# Runs headless as the user: it needs the user's session bus (obexd for messages and
+# contacts) and runtime directory ($XDG_RUNTIME_DIR/tether holds its socket), both of which
+# the user manager provides. No Wayland, no desktop.
+[Unit]
+Description=Earshot engine (iPhone calls, texts and notifications over Bluetooth)
+Documentation=https://github.com/jimas21/earshot
+After=dbus.socket
+Wants=dbus.socket
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# BlueZ is on the system bus, which a user unit cannot order after; wait for it briefly.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do busctl --system status org.bluez >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
+# A tetherd started by a client holds the runtime lock and makes this one exit: take it over.
+ExecStartPre=-/usr/bin/pkill -u %U -f ^tetherd
+ExecStart=%h/.local/share/earshot/engine/tetherd
+Environment=TETHER_LOG_STDERR=1
+UnsetEnvironment=LD_LIBRARY_PATH LD_PRELOAD
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+SyslogIdentifier=earshot-tetherd
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=default.target

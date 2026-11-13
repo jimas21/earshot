@@ -12,7 +12,7 @@ add_library(tether STATIC
     src/client.cpp
     src/extension_host.cpp
     src/service.cpp
-    src/discovery.cpp
+    src/discovery_group.cpp
     src/mpris.cpp
     src/audio.cpp
     src/bluetooth/objects.cpp
@@ -45,12 +45,26 @@ add_library(tether STATIC
     src/bluetooth/connection.cpp
     src/bluetooth/diagnostics.cpp
     src/session_lock.cpp
-    src/wayland.cpp
-    src/wayland_protocols/wayland.cpp
-    src/wayland_protocols/wlr-data-control-unstable-v1.cpp
-    src/wayland_protocols/ext-data-control-v1.cpp
-    src/wayland_protocols/ext-idle-notify-v1.cpp
 )
+
+if(TETHER_MDNS)
+    target_sources(tether PRIVATE src/discovery.cpp)
+else()
+    target_sources(tether PRIVATE src/discovery_stub.cpp)
+endif()
+
+if(TETHER_WAYLAND)
+    target_sources(tether PRIVATE
+        src/wayland.cpp
+        src/wayland_protocols/wayland.cpp
+        src/wayland_protocols/wlr-data-control-unstable-v1.cpp
+        src/wayland_protocols/ext-data-control-v1.cpp
+        src/wayland_protocols/ext-idle-notify-v1.cpp
+    )
+else()
+    target_sources(tether PRIVATE src/wayland_stub.cpp)
+    target_compile_definitions(tether PUBLIC TETHER_NO_WAYLAND)
+endif()
 
 pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0 gio-2.0)
 
@@ -69,11 +83,18 @@ target_compile_definitions(tether PRIVATE
 
 target_link_libraries(tether PUBLIC
     nlohmann_json::nlohmann_json
-    PkgConfig::WAYLAND
     OpenSSL::SSL
     OpenSSL::Crypto
-    PkgConfig::AVAHI
     PkgConfig::GLIB
-    PkgConfig::SECRET
     Intl::Intl
 )
+if(TETHER_WAYLAND)
+    target_link_libraries(tether PUBLIC PkgConfig::WAYLAND)
+endif()
+if(TETHER_MDNS)
+    target_link_libraries(tether PUBLIC PkgConfig::AVAHI)
+endif()
+if(TETHER_LIBSECRET)
+    target_link_libraries(tether PUBLIC PkgConfig::SECRET)
+    target_compile_definitions(tether PRIVATE TETHER_LIBSECRET)
+endif()

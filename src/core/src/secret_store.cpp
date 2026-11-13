@@ -8,7 +8,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#ifdef TETHER_LIBSECRET
 #include <libsecret/secret.h>
+#endif
 #include <mutex>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -44,6 +46,7 @@ namespace tether {
             constexpr size_t NONCE_BYTES = 12;
             constexpr size_t TAG_BYTES = 16;
 
+#ifdef TETHER_LIBSECRET
             const SecretSchema* store_schema() {
                 static const SecretSchema schema = {
                     "com.tether.Store",
@@ -63,6 +66,7 @@ namespace tether {
                 };
                 return &schema;
             }
+#endif
 
             std::string keyfile_path() {
                 const std::filesystem::path dir = paths::config_dir();
@@ -92,6 +96,7 @@ namespace tether {
                 NoService,   // nothing on the bus
             };
 
+#ifdef TETHER_LIBSECRET
             // inside a flatpak libsecret keeps items in an app private keyring file sealed by the secret portal
             KeyLookup key_from_portal(std::vector<unsigned char>& out) {
                 GError* err = nullptr;
@@ -209,6 +214,17 @@ namespace tether {
                 }
                 return ok == TRUE;
             }
+
+#else
+            // Built without libsecret: no wallet to ask, so the store key lives in a 0600 file.
+            KeyLookup key_from_service(std::vector<unsigned char>&) {
+                return KeyLookup::NoService;
+            }
+
+            bool key_to_service(const std::vector<unsigned char>&) {
+                return false;
+            }
+#endif
 
             bool key_from_file(std::vector<unsigned char>& out) {
                 const std::string path = keyfile_path();

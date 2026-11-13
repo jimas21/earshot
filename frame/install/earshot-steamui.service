@@ -1,0 +1,22 @@
+# Earshot's helper (the Phone tab and notifications in Steam's VR UI) as a systemd --user
+# service (installed by install.sh). Python standard library only.
+[Unit]
+Description=Earshot Phone tab and notifications for Steam's VR UI
+Documentation=https://github.com/jimas21/earshot
+After=earshot-tetherd.service
+Wants=earshot-tetherd.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/share/earshot/frame/earshot-steamui.py
+UnsetEnvironment=LD_LIBRARY_PATH LD_PRELOAD
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+SyslogIdentifier=earshot-steamui
+
+[Install]
+WantedBy=default.target

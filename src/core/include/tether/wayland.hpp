@@ -1,6 +1,8 @@
 #pragma once
 
+#ifndef TETHER_NO_WAYLAND
 #include "tether/clipboard.hpp"
+#endif
 #include "tether/event_loop.hpp"
 #include <filesystem>
 #include <functional>
@@ -9,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#ifndef TETHER_NO_WAYLAND
 class CCWlDisplay;
 class CCWlRegistry;
 class CCWlSeat;
@@ -17,9 +20,31 @@ class CCExtDataControlManagerV1;
 struct wl_display;
 class CCExtIdleNotifierV1;
 class CCExtIdleNotificationV1;
+#endif
 
 namespace tether {
 
+#ifdef TETHER_NO_WAYLAND
+    // Built with TETHER_WAYLAND=OFF: the same interface, with no compositor to talk to.
+    // Clipboard sync reports itself unavailable; nothing else changes.
+    class WaylandContext {
+    public:
+        explicit WaylandContext(EpollEventLoop&) {}
+
+        bool init() { return false; }
+        const std::string& display_name() const { return display_name_; }
+        bool clipboard_available() const { return false; }
+        void set_clipboard_callback(std::function<void(const std::string&)>) {}
+        void set_clipboard_image_callback(std::function<void(const std::string&)>) {}
+        void copy_to_clipboard(const std::string&) {}
+        void copy_image_to_clipboard(const std::string&) {}
+        std::string get_clipboard() { return {}; }
+        std::string get_clipboard_image() { return {}; }
+
+    private:
+        std::string display_name_;
+    };
+#else
     class WaylandContext {
     public:
         WaylandContext(EpollEventLoop& loop);
@@ -66,6 +91,7 @@ namespace tether {
         std::function<void(const std::string&)> clipboard_cb_;
         std::function<void(const std::string&)> clipboard_image_cb_;
     };
+#endif
 
     // Sorted wayland-* socket names in runtime_dir, lock files and non-sockets skipped.
     std::vector<std::string> wayland_sockets(const std::filesystem::path& runtime_dir);

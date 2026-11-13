@@ -35,6 +35,7 @@
 #include <tether/otp.hpp>
 #include <tether/secret_store.hpp>
 #include <tether/wayland.hpp>
+#include <thread>
 #include <unistd.h>
 
 tether::EpollEventLoop* g_loop = nullptr;

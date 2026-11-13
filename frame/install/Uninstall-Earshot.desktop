@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Uninstall Earshot
+Comment=Removes Earshot from this Steam Frame (your settings are kept)
+Icon=edit-delete
+Exec=konsole --hold -e python3 -I -c "import sys,urllib.request as u; sys.excepthook=lambda *e: print('Could not download the Earshot installer. Check that the headset is online, then try again.'); exec(u.urlopen('https://github.com/jimas21/earshot/releases/latest/download/earshot-frame-install.py', timeout=60).read())" --uninstall
+Terminal=false
