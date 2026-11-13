@@ -1,0 +1,11 @@
+# The only packages the release job installs, with the SHA-256 of each wheel (x86_64 Linux, CPython 3.12).
+# Installed with: pip install --only-binary=:all: --require-hashes -r this file
+cryptography==44.0.0 \
+    --hash=sha256:831c3c4d0774e488fdc83a1923b49b9957d33287de923d58ebd3cec47a0ae43f \
+    --hash=sha256:3c672a53c0fb4725a29c303be906d3c1fa99c32f58abe008a82705f9ee96f40b \
+    --hash=sha256:404fdc66ee5f83a1388be54300ae978b2efd538018de18556dde92575e05defc \
+    --hash=sha256:f53c2c87e0fb4b0c00fa9571082a057e37690a8f12233306161c8f4b819960b7
+cffi==1.17.1 \
+    --hash=sha256:b62ce867176a75d03a665bad002af8e6d54644fad99a3c70905c543130e39d93
+pycparser==2.22 \
+    --hash=sha256:c3702b6d3dd8c7abc1afa565d7e63d53a1d0bd86cdc24edd75470f4de499cfcc

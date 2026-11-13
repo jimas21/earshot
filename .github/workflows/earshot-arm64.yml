@@ -62,7 +62,7 @@ jobs:
           fi
           echo "ver=${ver}" >> "${GITHUB_OUTPUT}"
 
-  # Tests and the Frame package: the installer, units, system setup and the Phone tab.
+  # Tests and the Frame package: the installer, units and the Phone tab.
   frame:
     name: Frame package
     needs: version
@@ -77,10 +77,9 @@ jobs:
 
       - name: Test the installer
         run: |
-          python3 -m py_compile frame/install/earshot-frame-install.py frame/install/earshot-system-setup.py
+          python3 -m py_compile frame/install/earshot-frame-install.py
           sh -n frame/install/install.sh
           sh -n frame/install/uninstall.sh
-          sh -n frame/install/earshot-system-setup.sh
           python3 -m unittest discover -s frame/install/tests -v
 
       # frame/tests holds the helper and menu tests (stand-in Tether, DevTools and vrcmd).
@@ -111,7 +110,6 @@ jobs:
           mkdir -p "dist/${name}" out
           d="dist/${name}"
           cp frame/install/install.sh frame/install/uninstall.sh \
-             frame/install/earshot-system-setup.sh frame/install/earshot-system-setup.py \
              frame/install/earshot-frame-install.py \
              frame/install/earshot-tetherd.service frame/install/earshot-steamui.service "${d}/"
           # The helper and the Phone tab (frame/menu): every file there except tests, flat.
@@ -374,17 +372,29 @@ jobs:
   # ed25519 seed), checks it against the public key pinned below and in
   # frame/install/earshot-frame-install.py, and creates a DRAFT release. A person
   # publishes the draft; nothing is public before that.
+  #
+  # The job runs in the `release` environment, so the secret exists only there and a
+  # required reviewer can hold every release. The signing tool is installed in its own step
+  # with no secret in the environment, from hash-pinned wheels only; the secret is read by
+  # the signing step alone, after the tarballs have been checked against their checksums.
   release:
     name: Sign and draft release
     if: github.ref_type == 'tag'
     needs: [version, frame, engine]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    environment: release
     timeout-minutes: 10
     permissions:
       contents: write
     env:
       VER: ${{ needs.version.outputs.ver }}
     steps:
+      - name: Check out the signing requirements
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/release-sign-requirements.txt
+          sparse-checkout-cone-mode: false
       - name: Download the engine
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -396,6 +406,20 @@ jobs:
           name: earshot-frame
           path: out
 
+      # The tarballs are the ones the build jobs produced: check them against the checksums
+      # made next to them before anything is signed.
+      - name: Check the tarballs against their checksums
+        run: |
+          cd out
+          sha256sum -c earshot-frame.sha256 "earshot-engine-${VER}-aarch64.tar.gz.sha256"
+
+      # No secret here. Wheels only, every hash pinned: nothing is built or run at install time.
+      - name: Install the signing tool
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/sign"
+          "${RUNNER_TEMP}/sign/bin/pip" install --quiet --only-binary=:all: --require-hashes \
+            -r .github/release-sign-requirements.txt
+
       # ed25519 signature over the exact tarball bytes. The public key is pinned here and
       # checked against the secret, so a wrong or rotated secret fails the job.
       - name: Sign the tarballs
@@ -403,8 +427,6 @@ jobs:
           EARSHOT_RELEASE_KEY: ${{ secrets.EARSHOT_RELEASE_KEY }}
           EARSHOT_RELEASE_PUBKEY: 'tzXaDplSb7PN763T4PnKQv3Elih4XplDsCl523lMK8s='
         run: |
-          python3 -m venv "${RUNNER_TEMP}/sign"
-          "${RUNNER_TEMP}/sign/bin/pip" install --quiet 'cryptography==44.0.0'
           "${RUNNER_TEMP}/sign/bin/python" - "out/earshot-engine-${VER}-aarch64.tar.gz" "out/earshot-frame-${VER}.tar.gz" <<'PY'
           import base64, os, sys
           from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -437,7 +459,6 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cd out
-          sha256sum -c earshot-frame.sha256 "earshot-engine-${VER}-aarch64.tar.gz.sha256"
           # The first install downloads the installer unsigned (it carries the key that checks
           # everything after it), so publish its checksum where it can be compared.
           inst_sha="$(sha256sum earshot-frame-install.py | cut -d' ' -f1)"
