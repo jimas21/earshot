@@ -15,9 +15,7 @@ Usually started by Install-Earshot.desktop (Desktop Mode), or by hand:
 The Phone tab runs the copy kept in ~/.local/share/earshot/frame/ with --if-newer
 --status-file for its "Check for updates" button and automatic updates.
 
-The one root step (BlueZ experimental mode, the Class of Device unit, L2CAP ERTM) is
-separate: earshot-system-setup.sh lists what it would change and asks first. This
-installer offers to run it, once, when it is run by hand and something is missing.
+Nothing here needs a password: no root, no files outside the user's home.
 
 Python standard library only. Pattern and signature code follow the Tragus installer.
 """
@@ -26,6 +24,7 @@ import argparse
 import base64
 import hashlib
 import http.client
+import io
 import json
 import os
 import platform
@@ -225,9 +224,10 @@ def check_signature(component, data, sig_text, asset=None):
         )
 
 
-def safe_extract(archive_path, dest, top):
-    """Unpack only regular files and folders under top/; refuse anything else."""
-    with tarfile.open(archive_path, "r:gz") as tar:
+def safe_extract(data, dest, top):
+    """Unpack only regular files and folders under top/ from the tarball bytes `data`; refuse anything
+    else. The archive is read from memory: nothing unchecked ever sits on disk as an archive."""
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
         members = tar.getmembers()
         if not members:
             raise InstallError("the release archive is empty")
@@ -255,6 +255,19 @@ def safe_extract(archive_path, dest, top):
     return os.path.join(dest, top)
 
 
+def check_version(root, tag, name):
+    """The signature covers the tarball, not the tag it was published under. A VERSION file inside it that
+    must equal the release tag stops an old, validly signed release being served as a new one."""
+    want = version_of(tag)
+    try:
+        with open(os.path.join(root, "VERSION"), encoding="utf-8") as f:
+            got = f.read().strip()
+    except OSError:
+        raise InstallError(f"{name} has no VERSION file; not using it") from None
+    if got != want:
+        raise InstallError(f"{name} is version {got or '(blank)'} but the release is {want}; not using it")
+
+
 # --- paths, versions, status ---------------------------------------------------------
 
 DATA_DIR = os.path.expanduser("~/.local/share/earshot")
@@ -263,7 +276,6 @@ VERSIONS_FILE = os.path.join(DATA_DIR, "versions.json")
 # Same path the Phone tab's helper (frame/menu/earshot-steamui.py) reads.
 DEFAULT_STATUS_FILE = os.path.join(STATE_DIR, "update.json")
 LOCK_FILE = os.path.join(STATE_DIR, "install.lock")
-SYSTEM_MANIFEST = "/etc/earshot/manifest.json"
 _TAG_OK = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_")
 
 
@@ -423,31 +435,9 @@ def download_component(component, workdir, tag):
     sig_text = fetch(base + ".sig").decode("ascii", "replace")
     check_signature(component, data, sig_text, asset)
     print(f"  signature OK ({len(data):,} bytes, sha256 {hashlib.sha256(data).hexdigest()[:16]}...)")
-    archive = os.path.join(workdir, asset)
-    with open(archive, "wb") as f:
-        f.write(data)
-    root = safe_extract(archive, workdir, component["top"])
-    os.remove(archive)
-    if component["key"] == "frame":
-        record_setup_hash(root)
+    root = safe_extract(data, workdir, component["top"])
+    check_version(root, tag, component["name"])
     return root
-
-
-SETUP_PY = "earshot-system-setup.py"
-
-
-def record_setup_hash(frame_root):
-    """Write the sha256 of the root setup script, as it came out of the signature-checked
-    release, beside it. earshot-system-setup.sh checks the script against this before it runs
-    anything as root."""
-    path = os.path.join(frame_root, SETUP_PY)
-    try:
-        with open(path, "rb") as f:
-            digest = hashlib.sha256(f.read()).hexdigest()
-    except OSError:
-        raise InstallError(f"{SETUP_PY} is missing from the release") from None
-    with open(path + ".sha256", "w", encoding="ascii") as f:
-        f.write(digest + "\n")
 
 
 def health_check(engine_dir):
@@ -527,66 +517,38 @@ def install(args, status):
     finally:
         if lock:
             lock.close()
+    if args.if_newer:
+        return
     print()
     print("Earshot is installed and running.")
-    print("Next: open the Phone tab in the quick menu and tap Pair iPhone. Do not pair in Steam's Bluetooth settings.")
-    if not args.if_newer:
-        offer_system_setup()
+    print("Next: restart the headset once, so Steam picks up the Phone tab. Then open the quick menu, choose")
+    print("Phone, and tap Pair iPhone. Do not pair in Steam's Bluetooth settings.")
 
 
-def system_setup_script():
-    return os.path.join(DATA_DIR, "frame", "earshot-system-setup.sh")
+def tether_data_dirs():
+    """Where the engine keeps what it learns about the phone: the message journal and contact cache,
+    its settings and its encryption key. They belong to Earshot's engine, so removing Earshot removes them."""
+    data = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return [os.path.join(data, "tether"), os.path.join(config, "tether"), os.path.join(state, "tether")]
 
 
-def offer_system_setup():
-    """If BlueZ is not set up for the iPhone yet, run the explicit, root setup. It lists
-    what it will change and asks first; this only starts it when a person is at a terminal."""
-    script = system_setup_script()
-    if not os.path.isfile(script) or not sys.stdin.isatty():
-        return
-    r = subprocess.run(["sh", script, "--check"], env=clean_env())
-    if r.returncode == 0:
-        return  # nothing missing
-    print()
-    print("Bluetooth on this headset needs a one-time system setup before the iPhone can send")
-    print("messages and notifications. It lists each change and asks for your password.")
-    subprocess.run(["sh", script], env=clean_env())
-
-
-def remove_kept_setup():
-    """An earlier uninstall kept the setup scripts for the system undo; it is done now."""
-    frame = os.path.join(DATA_DIR, "frame")
-    if os.path.isdir(frame) and all(n.startswith("earshot-system-setup.") for n in os.listdir(frame)):
-        shutil.rmtree(frame, ignore_errors=True)
-        try:
-            os.rmdir(DATA_DIR)
-        except OSError:
-            pass
+def remove_tether_data():
+    for path in tether_data_dirs():
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def uninstall(args):
     script = os.path.join(DATA_DIR, "frame", "uninstall.sh")
-    undone = not os.path.isfile(SYSTEM_MANIFEST)  # nothing to undo
-    if not undone and os.path.isfile(system_setup_script()) and sys.stdin.isatty():
-        answer = input("Also undo the Bluetooth system setup Earshot made (needs your password)? [y/N] ")
-        if answer.strip().lower() in ("y", "yes"):
-            r = subprocess.run(["sh", system_setup_script(), "--undo"], env=clean_env())
-            undone = r.returncode == 0 and not os.path.isfile(SYSTEM_MANIFEST)
     if not os.path.isfile(script):
         print("Earshot is not installed.")
-        if undone:
-            remove_kept_setup()
+        remove_tether_data()
     else:
-        # The setup scripts are the only way to undo the system setup: keep them until it is undone.
-        cmd = ["sh", script] + (["--purge"] if args.purge else []) + ([] if undone else ["--keep-setup"])
+        cmd = ["sh", script] + (["--purge"] if args.purge else [])
         r = subprocess.run(cmd, env=clean_env())
         if r.returncode != 0:
             raise InstallError(f"removing Earshot failed (exit {r.returncode})")
-    if not undone:
-        print("The Bluetooth system setup is still in place, so its scripts were kept in")
-        print("  ~/.local/share/earshot/frame/")
-        print("To undo it later:  sh ~/.local/share/earshot/frame/earshot-system-setup.sh --undo")
-        print("then remove that folder (rm -rf ~/.local/share/earshot), or run this uninstall again and answer y.")
     print("Done.")
 
 
@@ -594,7 +556,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Install, update or remove Earshot on a Steam Frame.")
     ap.add_argument("--uninstall", action="store_true", help="remove Earshot")
     ap.add_argument("--purge", action="store_true",
-                    help="with --uninstall: also delete the settings in ~/.config/earshot")
+                    help="with --uninstall: also delete the Earshot settings in ~/.config/earshot")
     ap.add_argument("--download-only", metavar="DIR",
                     help="download, check and unpack the releases into DIR without installing")
     ap.add_argument("--if-newer", action="store_true",

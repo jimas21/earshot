@@ -49,7 +49,27 @@ STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser(
 CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "earshot")
 
 CDP_BASE = "http://127.0.0.1:8080"
-PAGE_MARKS = ("vrOverlayKey=valve.steam.gamepadui.bar",)  # the bar and barpopup.* pages, as Tragus finds them
+# The bar and barpopup.* pages, as Tragus finds them: a real page (not a frame or worker) whose
+# vrOverlayKey query value starts with this. Anything else that merely mentions it is not ours to inject into.
+PAGE_KEY_PREFIX = "valve.steam.gamepadui.bar"
+
+
+def is_bar_page(target):
+    if not (isinstance(target, dict) and target.get("type") == "page" and target.get("webSocketDebuggerUrl")
+            and isinstance(target.get("url"), str)):
+        return False
+    try:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(target["url"]).query)
+    except ValueError:
+        return False
+    return any(v.startswith(PAGE_KEY_PREFIX) for v in query.get("vrOverlayKey", []))
+
+
+def vrcmd_text(text):
+    """What goes after vrcmd --notify. A text that begins with a dash would be read as another option, so
+    it is always preceded by a letter-free marker that cannot be: the first character is never "-"."""
+    text = str(text)
+    return "\u200b" + text if text.startswith("-") else text
 MENU_FILE = os.path.join(HERE, "earshot-menu.js")
 BINDING = "earshotAction"
 VRCMD = "/opt/steamvr/bin/linuxarm64/vrcmd"
@@ -659,8 +679,7 @@ class Shell:
             targets = []
         wanted = {}
         for t in targets:
-            if (isinstance(t, dict) and isinstance(t.get("url"), str) and t.get("webSocketDebuggerUrl")
-                    and any(m in t["url"] for m in PAGE_MARKS)):
+            if is_bar_page(t):
                 wanted[t.get("id")] = t
         for pid in [p for p in self.pages if p not in wanted]:
             self.drop(pid)
@@ -1838,7 +1857,7 @@ class Helper:
     def notify_direct(self, text):
         """A SteamVR notification that does not depend on the alert settings (it asks for a person's attention)."""
         if self.exists(self.vrcmd):
-            self.exec.run([self.vrcmd, "--notify", text], None, timeout=20)
+            self.exec.run([self.vrcmd, "--notify", vrcmd_text(text)], None, timeout=20)
 
     def phone_paired(self):
         address = str(self.bt_status.get("device_address") or "").lower()
@@ -2044,7 +2063,7 @@ class Helper:
                 log.warning("vrcmd not found; SteamVR notifications are off")
                 self.vrcmd_missing_logged = True
             return
-        self.exec.run([self.vrcmd, "--notify", text], None, timeout=20)
+        self.exec.run([self.vrcmd, "--notify", vrcmd_text(text)], None, timeout=20)
 
     # ----- actions from the menu -----
 
@@ -2295,28 +2314,37 @@ class Helper:
     # ----- state for the menu -----
 
     def setup_state(self):
-        """What the menu should say when things are not working yet."""
+        """What the menu should say when things are not working yet. Plain words: nothing here asks the
+        user to run a command, and nothing needs root."""
         if not self.engine_up:
-            return {"kind": "no_engine", "title": "The Earshot engine is not running",
-                    "text": "Start it from a terminal in Desktop Mode, or restart the headset.",
-                    "steps": [{"what": "Start the engine", "command": "systemctl --user start earshot-tetherd"}]}
+            return {"kind": "no_engine", "title": "Earshot is starting",
+                    "text": "The Earshot service is not running yet. Give it a few seconds. If this stays, "
+                            "restart the headset."}
         cap = self.bt_status.get("capability") if isinstance(self.bt_status.get("capability"), dict) else None
         if self.bt_status and (not self.bt_status.get("available") or cap is None):
-            steps = [{"what": s.get("what", ""), "command": s.get("command", "")}
-                     for s in (cap or {}).get("setup", []) if isinstance(s, dict)][:6]
             reasons = [trim(r, 160) for r in (cap or {}).get("reasons", []) if isinstance(r, str)][:4]
             return {"kind": "no_bluetooth", "title": "Bluetooth is not ready for Earshot",
-                    "text": " ".join(reasons) or "The Bluetooth service is not available.", "steps": steps}
+                    "text": " ".join(reasons) or "The Bluetooth service is not available."}
         if self.bt_status and not self.phone_paired():
             return {"kind": "no_phone", "title": "No iPhone is paired yet",
-                    "text": "Pair your iPhone with Earshot. It takes about a minute.", "steps": [],
+                    "text": "Pair your iPhone with Earshot. It takes about a minute.",
                     "action": {"act": "pair-start", "label": "Pair iPhone"}}
-        cap_steps = [{"what": s.get("what", ""), "command": s.get("command", "")}
-                     for s in (cap or {}).get("setup", []) if isinstance(s, dict)][:6]
-        if cap_steps and not self.conn.get("classic_connected") and not self.conn.get("le_connected"):
-            return {"kind": "setup_needed", "title": "Bluetooth setup is incomplete",
-                    "text": trim(self.conn.get("link_reason") or "", 200), "steps": cap_steps}
         return None
+
+    def bluetooth_view(self):
+        """Read-only status for Settings: is Bluetooth ready, and if not, what is wrong. The engine's own
+        notes (such as the adapter class or L2CAP ERTM) are shown as information, never as steps."""
+        if not self.engine_up:
+            return {"ready": False, "text": "The Earshot service is not running yet.", "notes": []}
+        cap = self.bt_status.get("capability") if isinstance(self.bt_status.get("capability"), dict) else None
+        if not self.bt_status or cap is None or not self.bt_status.get("available"):
+            return {"ready": False, "text": "Bluetooth is not available.", "notes": []}
+        if not cap.get("adapter_present", True):
+            return {"ready": False, "text": "No Bluetooth adapter was found.", "notes": []}
+        if cap.get("powered") is False:
+            return {"ready": False, "text": "Bluetooth is turned off in the headset settings.", "notes": []}
+        notes = [trim(r, 220) for r in cap.get("reasons", []) if isinstance(r, str)][:4]
+        return {"ready": True, "text": "Bluetooth is ready.", "notes": notes}
 
     def phone_view(self):
         address = str(self.bt_status.get("device_address") or "").lower()
@@ -2389,6 +2417,7 @@ class Helper:
         return {
             "v": 1,
             "setup": self.setup_state(),
+            "bluetooth": self.bluetooth_view(),
             "pair": self.pairing.view(),
             "phone": self.phone_view(),
             "priority": {"mode": self.settings.get("priority"), "frame_active": self.frame_active(), "worn": self.worn},
@@ -2436,8 +2465,7 @@ def teardown_pages(cdp_base=CDP_BASE):
     except Exception:
         return
     for t in targets if isinstance(targets, list) else []:
-        if not (isinstance(t, dict) and isinstance(t.get("url"), str) and t.get("webSocketDebuggerUrl")
-                and any(m in t["url"] for m in PAGE_MARKS)):
+        if not is_bar_page(t):
             continue
         try:
             ws = WsClient(t["webSocketDebuggerUrl"])

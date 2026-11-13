@@ -199,6 +199,19 @@ class PriorityTests(unittest.TestCase):
         self.assertTrue(rig.pump(lambda: rig.vrcmd_texts(), 2))
         self.assertEqual(rig.vrcmd_texts()[0], "Chat: Hi - there")
 
+    def test_a_notification_text_can_never_look_like_a_vrcmd_option(self):
+        rig = Rig(self, worn=True)
+        rig.start()
+        rig.tether.push(notif(2, app="--help", title="x", body="y"))
+        self.assertTrue(rig.pump(lambda: rig.vrcmd_texts(), 2))
+        text = rig.vrcmd_texts()[0]
+        self.assertFalse(text.startswith("-"), repr(text))
+        self.assertIn("--help", text)
+        for plain in ("Chat: Hi", "", "a-b"):
+            self.assertEqual(H.vrcmd_text(plain), plain)
+        for dashed in ("-x", "--version", "-"):
+            self.assertFalse(H.vrcmd_text(dashed).startswith("-"))
+
     def test_not_worn_releases_hfp_and_stays_silent_but_records(self):
         rig = Rig(self, worn=True)
         rig.start()
@@ -725,6 +738,21 @@ class ShellTests(unittest.TestCase):
         rig.tether.push(notif(90, title="after"))
         self.assertTrue(rig.pump(lambda: rig.dev.last_state() and any(n["uid"] == 90 for n in rig.dev.last_state()["notifications"]), 4))
 
+    def test_only_real_bar_pages_are_injected(self):
+        good = {"type": "page", "webSocketDebuggerUrl": "ws://x", "url": "https://steamloopback.host/r/?a=1&vrOverlayKey=valve.steam.gamepadui.bar"}
+        self.assertTrue(H.is_bar_page(good))
+        self.assertTrue(H.is_bar_page(dict(good, url="http://localhost/?vrOverlayKey=valve.steam.gamepadui.barpopup.3")))
+        # the text elsewhere in the address, a frame or worker, a missing socket or a wrong type: not ours
+        self.assertFalse(H.is_bar_page(dict(good, url="http://localhost/vrOverlayKey=valve.steam.gamepadui.bar")))
+        self.assertFalse(H.is_bar_page(dict(good, url="http://localhost/?x=vrOverlayKey%3Dvalve.steam.gamepadui.bar")))
+        self.assertFalse(H.is_bar_page(dict(good, url="http://localhost/?vrOverlayKey=other.valve.steam.gamepadui.bar")))
+        self.assertFalse(H.is_bar_page(dict(good, type="iframe")))
+        self.assertFalse(H.is_bar_page(dict(good, type="service_worker")))
+        self.assertFalse(H.is_bar_page({k: v for k, v in good.items() if k != "type"}))
+        self.assertFalse(H.is_bar_page({k: v for k, v in good.items() if k != "webSocketDebuggerUrl"}))
+        for junk in (None, [], "x", {"type": "page", "url": 5, "webSocketDebuggerUrl": "ws://x"}):
+            self.assertFalse(H.is_bar_page(junk))
+
     def test_ignores_other_pages_and_bad_payloads(self):
         rig = Rig(self)
         rig.dev.pages["other"] = {"id": "other", "title": "x", "url": "http://localhost/other", "sock": None,
@@ -759,15 +787,32 @@ class SetupAndUpdateTests(unittest.TestCase):
         h = rig.helper
         h.engine_up = True
         h.bt_status = {"available": False, "device_address": "", "capability": {
-            "reasons": ["BlueZ was not started with --experimental."],
-            "setup": [{"what": "Enable experimental mode", "command": "sudo systemctl restart bluetooth"}]}}
+            "reasons": ["BlueZ was not started with --experimental."], "setup": []}}
         s = h.view_state()["setup"]
         self.assertEqual(s["kind"], "no_bluetooth")
-        self.assertEqual(s["steps"][0]["command"], "sudo systemctl restart bluetooth")
+        self.assertNotIn("steps", s)
+        self.assertNotIn("sudo", json.dumps(s))
+        self.assertFalse(h.view_state()["bluetooth"]["ready"])
         h.bt_status = dict(BT_STATUS, device_address="")
         self.assertEqual(h.view_state()["setup"]["kind"], "no_phone")
         h.bt_status = BT_STATUS
         self.assertIsNone(h.view_state()["setup"])
+        bt = h.view_state()["bluetooth"]
+        self.assertTrue(bt["ready"])
+        self.assertEqual(bt["text"], "Bluetooth is ready.")
+
+    def test_engine_notes_are_status_never_steps(self):
+        rig = Rig(self)
+        h = rig.helper
+        h.engine_up = True
+        h.bt_status = dict(BT_STATUS, capability={
+            "mode": "full", "powered": True, "adapter_present": True, "setup": [{"what": "x", "command": "sudo x"}],
+            "reasons": ["This adapter does not present itself as A/V Hands-Free."]})
+        view = h.view_state()
+        self.assertIsNone(view["setup"])
+        self.assertTrue(view["bluetooth"]["ready"])
+        self.assertEqual(view["bluetooth"]["notes"], ["This adapter does not present itself as A/V Hands-Free."])
+        self.assertNotIn("sudo", json.dumps(view))
 
     def test_update_runs_the_installer_in_its_own_unit(self):
         rig = Rig(self)

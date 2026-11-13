@@ -1,15 +1,13 @@
 #!/bin/sh
-# Remove Earshot's user services and files. Settings stay in ~/.config/earshot unless
-# --purge is given. The root setup is separate: earshot-system-setup.sh --undo.
-# --keep-setup leaves earshot-system-setup.* in place (the installer passes it while that
-# setup has not been undone, because those scripts are the only way to undo it).
+# Remove Earshot's user services and files. Earshot's own settings stay in ~/.config/earshot
+# unless --purge is given. What the engine learned about the phone is always removed: its message
+# journal and contact cache (~/.local/share/tether), its settings and encryption key
+# (~/.config/tether) and its state (~/.local/state/tether). No root is needed.
 set -u
 purge=""
-keep=""
 for arg in "$@"; do
     case "$arg" in
         --purge) purge=1 ;;
-        --keep-setup) keep=1 ;;
     esac
 done
 data="${XDG_DATA_HOME:-$HOME/.local/share}/earshot"
@@ -45,20 +43,11 @@ if [ -f "$marker" ]; then
     fi
 fi
 
-if [ -n "$keep" ]; then
-    for item in "$data"/* "$data"/.[!.]*; do
-        [ -e "$item" ] || continue
-        [ "$item" = "$data/frame" ] || rm -rf "$item"
-    done
-    for item in "$data/frame"/* "$data/frame"/.[!.]*; do
-        [ -e "$item" ] || continue
-        case "${item##*/}" in earshot-system-setup.*) ;; *) rm -rf "$item" ;; esac
-    done
-    echo "Kept the Bluetooth setup scripts in $data/frame (undo with earshot-system-setup.sh --undo)."
-else
-    rm -rf "$data"
-fi
+rm -rf "$data"
 rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/earshot"
+# The engine's own data: messages, contacts, its settings and key
+rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/tether" "${XDG_CONFIG_HOME:-$HOME/.config}/tether" \
+       "${XDG_STATE_HOME:-$HOME/.local/state}/tether"
 if [ -n "$purge" ]; then
     rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/earshot"
     echo "Earshot and its settings removed."

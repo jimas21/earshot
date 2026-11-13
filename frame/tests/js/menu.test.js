@@ -210,11 +210,13 @@ test('a conversation that cannot be replied to shows why instead of a text box',
   assert.match(text(p), /No reply route\./);
 });
 
-test('not set up yet: shows what is missing and the fix, keeps Settings reachable', () => {
+test('not set up yet: says what is wrong in plain words, never a command, keeps Settings reachable', () => {
   const p = openPopup();
-  p.w.__earshotMenu.setState(withState({ setup: { kind: 'no_bluetooth', title: 'Bluetooth is not ready for Earshot', text: 'BlueZ is too old.', steps: [{ what: 'Enable experimental mode', command: 'sudo systemctl restart bluetooth' }] } }));
+  p.w.__earshotMenu.setState(withState({ setup: { kind: 'no_bluetooth', title: 'Bluetooth is not ready for Earshot', text: 'Bluetooth is turned off in the headset settings.' } }));
   assert.match(text(p), /Bluetooth is not ready/);
-  assert.match(text(p), /sudo systemctl restart bluetooth/);
+  assert.match(text(p), /turned off in the headset settings/);
+  assert.equal(p.doc.querySelector('code'), null, 'no commands to run');
+  assert.doesNotMatch(text(p), /sudo|terminal/i);
   assert.equal(p.doc.querySelector('.es-item'), null, 'no empty lists');
   click(p, byAct(p, 'retry'));
   assert.deepEqual(p.last(), { type: 'retry' });

@@ -13,7 +13,7 @@ It must feel built in, and it must stay light.
 iPhone ── BLE (ANCS) ──────────┐
        └─ Classic BT (MAP, PBAP, HFP) ─┐
                                 ▼
-                     BlueZ (bluetoothd --experimental, obexd)
+                     BlueZ (stock bluetoothd, obexd)
                                 ▼
                 tetherd (headless, stripped build)  ◄── engine, from upstream
                                 ▼  UNIX socket ($XDG_RUNTIME_DIR/tether), docs/PROTOCOL.md
@@ -98,10 +98,12 @@ optional.
 
 ## Risks, in order
 
-1. **System setup on SteamOS.** The engine needs root-level setup: `bluetoothd
-   --experimental` (a systemd drop-in), a Class of Device unit, BlueZ 5.86 or newer,
-   and L2CAP ERTM enabled (gaming distros often set `bluetooth.disable_ertm=1` for
-   old Xbox controllers). Whether this survives SteamOS updates is unknown.
+1. **No root on SteamOS.** Earshot changes nothing outside the user's home: no `--experimental`
+   drop-in, no Class of Device unit, no kernel parameter. Pairing is started by the phone, the LE
+   half of the bond is read from `Device1` (ANCS offered), and the class of device and L2CAP ERTM
+   (`bluetooth.disable_ertm=1` on gaming distros) are only reported. What this costs is decided on
+   the headset: whether the iPhone offers Messages and Contacts without the A/V Hands-Free
+   class, and whether MAP and PBAP open.
 2. **Pop-ups over a running game.** Unproven for Steam's own toasts. The fallback
    overlay is proven possible on the Frame by an existing commercial app.
 3. **Presence sensor.** The Frame has one, but no documented API for a background

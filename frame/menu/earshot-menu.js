@@ -110,11 +110,8 @@
   .es-btn { border:0; border-radius:3px; background:#3d4450; color:#fff; font:inherit; font-size:13px; padding:8px 14px; cursor:pointer; }
   .es-btn.es-go { background:#3c9d2f; } .es-btn.es-stop { background:#c0392b; } .es-btn.es-blue { background:#1a9fff; }
   .es-btn.es-small { font-size:11px; padding:4px 8px; }
-  .es-banner { margin:8px 10px; padding:8px 10px; border-radius:3px; background:#3d2a1a; color:#ffcf99; }
-  .es-banner code, .es-setup code { display:block; margin-top:4px; padding:4px 6px; background:#10161d; color:#dcdedf; border-radius:3px; font-family:monospace; font-size:11px; user-select:all; word-break:break-all; }
   .es-setup { margin:8px 10px; padding:10px 12px; border-radius:4px; background:#23262e; }
   .es-setup b { color:#fff; }
-  .es-setup .es-step { margin-top:8px; font-size:12px; color:#b8bcbf; }
   .es-row { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:38px; border-bottom:1px solid #23262e; }
   .es-row > span { flex:1; line-height:1.25; }
   .es-row.es-col { flex-direction:column; align-items:stretch; justify-content:center; padding:6px 0; gap:4px; }
@@ -228,7 +225,6 @@
 
   function setupHtml(setup) {
     return `<div class="es-setup"><b>${esc(setup.title)}</b><div class="es-note" style="margin-top:4px">${esc(setup.text)}</div>` +
-      (setup.steps || []).map((s) => `<div class="es-step">${esc(s.what)}${s.command ? `<code>${esc(s.command)}</code>` : ''}</div>`).join('') +
       (setup.action && /^[a-z-]+$/.test(setup.action.act)
         ? `<button class="es-pbtn es-blue" data-act="${esc(setup.action.act)}">${esc(setup.action.label)}</button>`
         : `<div class="es-btns" style="margin-top:10px"><button class="es-btn es-blue" data-act="retry">Check again</button></div>`) + `</div>`;
@@ -344,6 +340,10 @@
     h += apps.length ? apps.map((a) => `<div class="es-row"><span>${esc(a.name)}</span><button class="es-sw${a.muted ? ' es-on' : ''}" data-act="mute" data-a="${esc(a.id)}" data-b="${a.muted ? '0' : '1'}" aria-label="Mute ${esc(a.name)}" aria-pressed="${a.muted ? 'true' : 'false'}"></button></div>`).join('') +
       '<div class="es-note">On means no pop-up. The app still shows under Alerts.</div>'
       : '<div class="es-note">Apps that send notifications will be listed here.</div>';
+    const bt = S.bluetooth || {};
+    h += '<div class="es-h">Bluetooth</div><div class="es-note" style="font-size:12px;line-height:1.7">' +
+      `${bt.ready ? '<b>Bluetooth is ready.</b>' : esc(bt.text || 'Checking Bluetooth...')}` +
+      (bt.notes || []).map((n) => `<br>${esc(n)}`).join('') + '</div>';
     h += '<div class="es-h">Phone</div><div class="es-note" style="font-size:12px;line-height:1.7">' +
       `Messages: ${p.messages ? 'connected' : 'not connected'}<br>Notifications: ${p.notifications ? 'connected' : (p.ancs_reason ? esc(p.ancs_reason) : 'not connected')}<br>Calls: ${p.calls ? 'connected' : p.calls_restore === 'pending' ? 'reconnecting...' : 'not connected'}` +
       (p.calls_restore === 'unverified' ? '<br>The call link did not come back after the headset took it back. Turn Bluetooth off and on again on the iPhone.' : '') +

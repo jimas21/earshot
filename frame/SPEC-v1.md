@@ -76,8 +76,9 @@ element-finding and styling approach):
   visible and wait for the iPhone, show the code with Confirm / Cancel, explain each failure in
   plain words with one fix button, then an "Almost done" checklist of the iPhone's switches.
   Scan-and-pick is the fallback. All state is in the helper. No terminal, no root.
-- **Not set up yet:** if the engine or system setup is missing, the tab shows what is
-  missing and how to fix it instead of empty lists.
+- **Not ready yet:** if the engine or Bluetooth is not running, the tab says so in plain words
+  instead of showing empty lists. Settings has a read-only Bluetooth status ("Bluetooth is
+  ready", or what is wrong). It never shows a command to run.
 
 ## Installer
 
@@ -87,11 +88,9 @@ element-finding and styling approach):
   installs and starts the user units (`earshot-tetherd.service`,
   `earshot-steamui.service`), creates `~/.steam/steam/.cef-enable-remote-debugging` if
   missing (and records that it did).
-- **System setup (root, separate, explicit):** BlueZ's experimental mode drop-in, the
-  Class of Device unit, and the L2CAP ERTM fix if needed. The installer lists exactly
-  what it will change, asks for the password once through a graphical prompt in
-  Desktop Mode, and writes a manifest so `uninstall.sh` can undo each change. Skipped if
-  already in place. It never touches anything Tragus installed.
+- **No root, ever:** nothing outside the home folder is touched and no password is asked. The engine
+  runs with `TETHER_NO_ROOT=1`, so it works on stock BlueZ (see `docs/BLUETOOTH.md`, "Running
+  without root"). Uninstall removes what the engine stored about the phone as well.
 - Signed releases: ed25519, public key pinned in the installer, as Tragus does.
   Self-update every 6 hours, on by default, with a setting to turn it off.
 
@@ -102,7 +101,7 @@ element-finding and styling approach):
   Cover reconnects, the priority rules, burst collapsing, replies, and calls.
 - Menu: runs under jsdom with a stub of Steam's page structure and the binding.
 - Installer: unit tests in the style of Tragus's installer tests (signature check,
-  version comparison, manifest and undo, no-root path).
+  version comparison, release version binding, uninstall, no-root path).
 - CI builds the engine for aarch64 and checks `ldd` shows nothing missing against a
   SteamOS-like image where possible.
 

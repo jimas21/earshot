@@ -5,6 +5,7 @@ install.sh and uninstall.sh against a fake home with a stub systemctl (Unix only
 
 import configparser
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -58,8 +59,26 @@ class DesktopFileTests(unittest.TestCase):
                 continue
             text = read(name)
             self.assertNotIn("\r", text, name)
-            for needle in ("/home/deck", "10.0.0.", "immortal"):
+            for needle in ("/home/deck", "10.0.0.", "192.168."):
                 self.assertNotIn(needle, text, name)
+            # nothing that names a person or a machine: a home path, an email address that is not a placeholder
+            self.assertIsNone(re.search(r"/home/(?!deck\b|user\b)\w+", text), name)
+            self.assertIsNone(re.search(r"[A-Za-z]:\\Users\\", text), name)
+            for address in re.findall(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", text):
+                self.assertTrue(address.endswith(("@example.com", "@users.noreply.github.com")) or
+                                address.startswith("noreply@"), f"{name}: {address}")
+
+    def test_the_product_never_asks_for_root(self):
+        """No installer, script, unit or document may use or offer root: no password, no system files."""
+        words = ("pkexec", "sudo", "kdialog", "/etc/earshot", "system-setup", "system_setup")
+        names = [n for n in os.listdir(INSTALL) if os.path.isfile(os.path.join(INSTALL, n))]
+        self.assertFalse([n for n in names if "system-setup" in n], "the root setup step must not exist")
+        for name in names:
+            text = read(name).lower()
+            for word in words:
+                self.assertNotIn(word, text, f"{name} mentions {word}")
+            # saying it needs none is fine; asking for one is not
+            self.assertIsNone(re.search(r"(ask|prompt|enter|type|supply)[^.\n]{0,30}password", text), name)
 
 
 class UnitFileTests(unittest.TestCase):
@@ -82,6 +101,8 @@ class UnitFileTests(unittest.TestCase):
         self.assertIn("WantedBy=default.target", s["Install"])
         self.assertIn("Environment=TETHER_LOG_STDERR=1", s["Service"])
         self.assertIn("Environment=TETHER_NO_TCP=1", s["Service"])   # Bluetooth only: nothing listens on the network
+        self.assertIn("Environment=TETHER_NO_ROOT=1", s["Service"])  # stock BlueZ, normal user
+        self.assertIn("Environment=TETHER_RETENTION=none", s["Service"])  # no message or contact copies on disk
         self.assertIn("NoNewPrivileges=yes", s["Service"])
         self.assertFalse([l for l in s["Service"] if l.startswith("User=")])  # runs as the user manager's user
 
@@ -106,12 +127,12 @@ class UnitFileTests(unittest.TestCase):
 class ScriptSyntaxTests(unittest.TestCase):
     @unittest.skipUnless(SH, "no sh")
     def test_sh_syntax(self):
-        for name in ("install.sh", "uninstall.sh", "earshot-system-setup.sh"):
+        for name in ("install.sh", "uninstall.sh"):
             r = subprocess.run([SH, "-n", os.path.join(INSTALL, name)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, name + r.stderr)
 
     def test_python_files_compile(self):
-        for name in ("earshot-frame-install.py", "earshot-system-setup.py"):
+        for name in ("earshot-frame-install.py",):
             with open(os.path.join(INSTALL, name), encoding="utf-8") as f:
                 compile(f.read(), name, "exec")
 
@@ -206,18 +227,27 @@ class ScriptRunTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("missing", r.stderr)
 
-    def test_keep_setup_keeps_only_the_setup_scripts(self):
-        frame = os.path.join(self.data, "frame")
-        for n in ("earshot-system-setup.sh", "earshot-system-setup.py", "earshot-system-setup.py.sha256", "other.txt"):
-            with open(os.path.join(frame, n), "w") as f:
-                f.write("x")
+    def test_uninstall_removes_the_engines_own_data_but_not_other_programs(self):
+        engine = [os.path.join(self.home, ".local/share/tether/messages.ndjson.enc"),
+                  os.path.join(self.home, ".config/tether/store.key"),
+                  os.path.join(self.home, ".config/tether/bluetooth.json"),
+                  os.path.join(self.home, ".local/state/tether/x")]
+        other = os.path.join(self.home, ".config/tragus/keep")
+        for path in engine + [other]:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "w").close()
         self.sh("install.sh")
-        r = self.sh("uninstall.sh", "--keep-setup")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(sorted(os.listdir(self.data)), ["frame"])
-        self.assertEqual(sorted(os.listdir(frame)),
-                         ["earshot-system-setup.py", "earshot-system-setup.py.sha256", "earshot-system-setup.sh"])
-        self.assertFalse(os.path.exists(os.path.join(self.home, ".config/systemd/user/earshot-tetherd.service")))
+        self.assertEqual(self.sh("uninstall.sh").returncode, 0)  # without --purge: still removed
+        for path in engine:
+            self.assertFalse(os.path.exists(path), path)
+            self.assertFalse(os.path.exists(os.path.dirname(path)), path)
+        self.assertTrue(os.path.exists(other))
+        self.assertTrue(os.path.isdir(os.path.join(self.home, ".config/earshot")))  # Earshot settings kept
+
+    def test_the_uninstall_text_says_what_it_removes(self):
+        text = read("uninstall.sh")
+        for place in (".local/share}/tether", ".config}/tether"):
+            self.assertIn(place, text)
 
     def test_uninstall_runs_the_helpers_teardown_first(self):
         usr_python = "/usr/bin/python3"
@@ -232,75 +262,6 @@ class ScriptRunTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.data))
 
 
-@unittest.skipUnless(SH and os.name == "posix" and os.path.exists("/usr/bin/python3")
-                     and os.path.exists("/usr/bin/sha256sum"), "needs a Unix sh and /usr/bin tools")
-class SystemSetupRootStepTests(unittest.TestCase):
-    """The part of earshot-system-setup.sh that runs as root, exercised as an ordinary user:
-    it must run a root-owned copy of the script, and only when its sha256 matches."""
-
-    def snippet(self):
-        text = read("earshot-system-setup.sh")
-        start = text.index("root_script='") + len("root_script='")
-        return text[start:text.index("'\n", start)]
-
-    def setUp(self):
-        self.dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
-        self.py = os.path.join(self.dir, "setup.py")
-        with open(self.py, "w") as f:
-            f.write("import sys\nprint('ran', *sys.argv[1:])\n")
-        import hashlib
-        with open(self.py, "rb") as f:
-            self.good = hashlib.sha256(f.read()).hexdigest()
-
-    def run_snippet(self, digest):
-        return subprocess.run([SH, "-c", self.snippet(), "sh", self.py, digest, "--apply"],
-                              capture_output=True, text=True, timeout=30)
-
-    def test_matching_hash_runs_the_script_with_the_action(self):
-        r = self.run_snippet(self.good)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout.strip(), "ran --apply --yes")
-
-    def test_mismatch_runs_nothing(self):
-        r = self.run_snippet("0" * 64)
-        self.assertEqual(r.returncode, 3)
-        self.assertNotIn("ran", r.stdout)
-        self.assertIn("does not match", r.stderr)
-
-    def test_the_copy_is_what_runs_not_the_file_on_disk(self):
-        text = self.snippet()
-        self.assertIn('/usr/bin/cp -- "$1" "$tmp/setup.py"', text)
-        self.assertIn('/usr/bin/python3 -I "$tmp/setup.py"', text)
-        self.assertNotIn('-I "$1"', text)
-
-    def test_nothing_elevated_uses_a_path_resolved_python_or_the_user_file(self):
-        text = read("earshot-system-setup.sh")
-        self.assertNotIn("command -v python3", text)
-        for line in text.splitlines():
-            words = line.replace("|", " ").split()
-            if words and not words[0].startswith("#") and ("pkexec" in words or "sudo" in words)                     and "command" not in words:
-                self.assertIn('/bin/sh -c "$root_script"', line, line)
-                self.assertNotIn('"$python"', line, line)
-                self.assertNotIn("-I", line, line)
-
-    def test_missing_checksum_refuses_before_any_elevation(self):
-        # run the whole script, answering yes, with a fake pkexec/sudo that would leave a mark
-        bindir = os.path.join(self.dir, "bin")
-        os.makedirs(bindir)
-        mark = os.path.join(self.dir, "elevated")
-        for tool in ("pkexec", "sudo"):
-            with open(os.path.join(bindir, tool), "w") as f:
-                f.write("#!/bin/sh\ntouch %s\n" % mark)
-            os.chmod(os.path.join(bindir, tool), 0o755)
-        for n in ("earshot-system-setup.sh", "earshot-system-setup.py"):
-            shutil.copy(os.path.join(INSTALL, n), self.dir)
-        env = {"HOME": self.dir, "PATH": bindir + os.pathsep + os.environ.get("PATH", ""), "DISPLAY": ":0"}
-        r = subprocess.run([SH, os.path.join(self.dir, "earshot-system-setup.sh"), "--undo"], env=env,
-                           input="y\n", capture_output=True, text=True, timeout=30)
-        self.assertFalse(os.path.exists(mark), r.stdout + r.stderr)
-
-
 class DocsAndCiTests(unittest.TestCase):
     ROOT = os.path.dirname(os.path.dirname(INSTALL))
 
@@ -309,10 +270,50 @@ class DocsAndCiTests(unittest.TestCase):
             return f.read()
 
     def test_readme_states_the_unsigned_first_download_and_how_to_check_it(self):
-        readme = self.text("frame", "README.md")
+        readme = self.text("README.md")
         self.assertIn("not signature-checked", readme)
         self.assertIn("sha256sum earshot-frame-install.py", readme)
         self.assertIn("fingerprint", readme)
+        self.assertIn("78e1b408f2949b742e06195f89ae0375d4d0b726e0041345f3f37d4ad910e85a", readme)
+
+    def test_readme_describes_the_final_no_password_flow(self):
+        readme = self.text("README.md")
+        self.assertIn("Install-Earshot.desktop", readme)
+        self.assertIn("Pair iPhone", readme)
+        self.assertIn("restart the headset", readme.lower())
+        self.assertIn("no password", readme.lower())
+        self.assertNotIn("pkexec", readme)
+        self.assertNotIn("system setup", readme.lower())
+
+    def test_upstream_readme_moved_and_the_frame_readme_points_to_the_front_page(self):
+        self.assertTrue(os.path.isfile(os.path.join(self.ROOT, "docs", "UPSTREAM-README.md")))
+        pointer = self.text("frame", "README.md")
+        self.assertLess(len(pointer.splitlines()), 15)
+        self.assertIn("../README.md", pointer)
+
+    def test_readme_images_exist(self):
+        readme = self.text("README.md")
+        for path in re.findall(r"!\[[^\]]*\]\(([^)#?]+)\)", readme) + re.findall(r'<img[^>]+src="([^"]+)"', readme):
+            if path.startswith("http"):
+                continue
+            self.assertTrue(os.path.isfile(os.path.join(self.ROOT, path)), path)
+
+    def test_release_signing_is_pinned_and_gated(self):
+        wf = self.text(".github", "workflows", "earshot-arm64.yml")
+        self.assertIn("environment: release", wf)
+        self.assertIn("--require-hashes", wf)
+        self.assertIn("--only-binary=:all:", wf)
+        self.assertIn("sha256sum -c", wf)
+        # the secret appears in the signing step only
+        self.assertEqual(wf.count("secrets.EARSHOT_RELEASE_KEY"), 1)
+        reqs = self.text(".github", "release-sign-requirements.txt")
+        for name in ("cryptography==", "cffi==", "pycparser=="):
+            self.assertIn(name, reqs)
+        self.assertGreaterEqual(reqs.count("--hash=sha256:"), 3)
+
+    def test_both_tarballs_carry_the_version_the_installer_checks(self):
+        wf = self.text(".github", "workflows", "earshot-arm64.yml")
+        self.assertEqual(wf.count('> "${d}/VERSION"'), 2)
 
     def test_ci_publishes_the_installer_checksum_and_names_no_person(self):
         wf = self.text(".github", "workflows", "earshot-arm64.yml")

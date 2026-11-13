@@ -179,7 +179,7 @@ class FakeDevTools:
         mark = "valve.steam.gamepadui.barpopup.%d" % n if kind == "popup" else "valve.steam.gamepadui.bar"
         with self.lock:
             self.pages[pid] = {
-                "id": pid, "title": "SteamVR - %s (%d)" % (mark, n),
+                "id": pid, "type": "page", "title": "SteamVR - %s (%d)" % (mark, n),
                 "url": "http://localhost/?vrOverlayKey=%s" % mark,
                 "webSocketDebuggerUrl": "ws://127.0.0.1:%d/devtools/page/%s" % (self.port, pid),
                 "version": None, "sock": None, "bindings": [], "scripts": [], "states": [], "teardowns": 0,
@@ -204,7 +204,7 @@ class FakeDevTools:
             return
         if path == "/json/list":
             with self.lock:
-                body = json.dumps([{k: v for k, v in p.items() if k in ("id", "title", "url", "webSocketDebuggerUrl")}
+                body = json.dumps([{k: v for k, v in p.items() if k in ("id", "type", "title", "url", "webSocketDebuggerUrl")}
                                    for p in self.pages.values()]).encode()
             sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % len(body) + body)
             sock.close()

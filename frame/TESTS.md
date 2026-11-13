@@ -3,31 +3,35 @@
 In order: each one decides whether the next is worth running. Run over SSH on the
 Frame. Record results at the bottom with the date and SteamOS version.
 
-## 1. System readiness (read-only, about 5 minutes)
+## 1. What the stock system offers (read-only, about 5 minutes)
+
+Nothing here changes anything and nothing needs a password. Earshot runs as a normal user on
+the Frame's own Bluetooth stack, so these decide whether that is enough.
 
 ```bash
 cat /etc/os-release | head -5
-pacman -Q bluez bluez-utils bluez-obex pipewire wireplumber 2>&1
+pacman -Q bluez bluez-obex pipewire wireplumber 2>&1
 bluetoothctl --version
-systemctl cat bluetooth | grep -E 'ExecStart|experimental'
-cat /sys/module/bluetooth/parameters/disable_ertm
-btmgmt info | head -20                       # look for le, secure-conn, advertising
-busctl --system introspect org.bluez /org/bluez/hci0 | grep -c AdvertisementMonitor
-ls /etc/systemd/system/bluetooth.service.d/ 2>&1
-steamos-readonly status 2>&1
-sudo -n true && echo "sudo: passwordless" || echo "sudo: needs password or not allowed"
+systemctl cat bluetooth | grep ExecStart                  # no --experimental expected
+cat /sys/module/bluetooth/parameters/disable_ertm         # Y: MAP/PBAP may refuse; Earshot only reports it
+bluetoothctl show | grep -E 'Class|Powered|Roles|UUID'   # Class, and whether Handsfree (111e) is registered
+busctl --system introspect org.bluez /org/bluez/hci0 | grep -E 'LEAdvertisingManager1|AdvertisementMonitor'
+busctl --user list | grep -i -E 'obex|telephony'          # obexd, and PipeWire's telephony service
 ```
 
-Pass: BlueZ 5.86 or newer and `bluez-obex` present (or installable), sudo available,
-a controller with LE, advertising and Secure Connections.
-Blocker: BlueZ older than 5.86 with no way to update it.
+Pass: BlueZ 5.86 or newer and `bluez-obex` present, LE advertising manager present, a
+PipeWire telephony service or a Handsfree record registered by something.
+Blocker: BlueZ older than 5.86 with no way to update it. Everything else is decided by test 3b:
+whether the iPhone offers ANCS after a phone-initiated pairing, whether it offers the Messages
+and Contacts switches without the class of device being A/V Hands-Free (major 4, minor 8: not
+settable without root), and whether MAP and PBAP open or report `forbidden` / `no_record`.
 
 ## 2. Engine on the Frame (upstream build, no Earshot code)
 
 Use upstream's `tether-<version>-aarch64.AppImage` (needs glibc 2.38 or newer).
 
-1. `./tether*.AppImage --bt-setup` and apply what it prints (the experimental drop-in,
-   the Class of Device unit, ERTM if needed). Note every change made under `/etc`.
+1. Do not run `--bt-setup` and do not change anything under `/etc`: this test is about the
+   stock system. (If a step below fails only because of what that would have set, note which.)
 2. Start the daemon headless: `dbus-run-session ./tether*.AppImage tetherd` (see
    `docs/HEADLESS.md`), or install the user unit with `tether service`.
 3. Pair: `tether --bt-pair <iphone-address>`, confirm the code on both sides. (This is
@@ -37,7 +41,7 @@ Use upstream's `tether-<version>-aarch64.AppImage` (needs glibc 2.38 or newer).
 5. Check `tether --bt-status` and `tether --bt-connection`.
 6. Receive a text and a notification from another app. Send a reply with the CLI.
 7. Ring the phone from another phone; decline it from the Frame.
-8. Reboot the Frame and check the setup survived. After the next SteamOS update, check again.
+8. Reboot the Frame and check the iPhone reconnects by itself. After the next SteamOS update, check again.
 
 9. **Must verify (Earshot helper, hands-free hand-back).** With the helper running, take
    the headset off (or set Priority to "Always phone") and ring the phone from another phone:
@@ -96,8 +100,8 @@ layout). Stop the upstream Tether test daemon from test 2 first. Then:
    stay on the phone. Back to Auto.
 9. `top`: idle CPU and memory of `tetherd` and `earshot-steamui.py` against the budget in
    PLAN.md.
-10. `Uninstall-Earshot.desktop` (or `uninstall.sh`): the tab goes, the system setup offers
-   its undo, nothing of Tragus is touched.
+10. `Uninstall-Earshot.desktop` (or `uninstall.sh`): the tab goes, `~/.local/share/tether`,
+   `~/.config/tether` and `~/.local/state/tether` are gone, nothing of Tragus is touched.
 
 ## 4. Presence sensor
 
