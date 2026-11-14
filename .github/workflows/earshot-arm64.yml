@@ -2,8 +2,8 @@ name: Earshot ARM64
 
 # Builds what the Steam Frame gets, on GitHub's free ARM64 runner (the same glibc era as
 # SteamOS's userland needs, no cross compiling):
-#   - earshot-engine-<ver>-aarch64.tar.gz  tetherd + tether, headless, stripped, with any
-#     library SteamOS does not ship bundled under lib/ ($ORIGIN/lib RUNPATH)
+#   - earshot-engine-<ver>-aarch64.tar.gz  tetherd + tether + obexd, headless, stripped, with any
+#     library SteamOS does not ship (libical for obexd) bundled under lib/ ($ORIGIN/lib RUNPATH)
 #   - earshot-frame-<ver>.tar.gz           the installer, unit files, helper and Phone tab
 # Branch pushes produce workflow artifacts only. The disabled "release" job at the bottom
 # is the signing and publishing step, modelled on Tragus's; it needs the maintainer's key.
@@ -33,10 +33,16 @@ env:
   # SteamOS ships glibc 2.43 and a current GCC; refuse anything that needs more than this.
   MAX_GLIBC: '2.43'
   MAX_GLIBCXX: '3.4.34'
+  # obexd (BlueZ's OBEX daemon: texts and contacts over Bluetooth). SteamOS ships none, so it is built
+  # here from the official BlueZ release tarball, which must match this sha256 (the same sum is listed in
+  # kernel.org's signed sha256sums.asc for pub/linux/bluetooth). libical comes from Ubuntu's signed
+  # package and is bundled under lib/ with whatever it needs that SteamOS lacks.
+  BLUEZ_VERSION: '5.79'
+  BLUEZ_SHA256: '4164a5303a9f71c70f48c03ff60be34231b568d93a9ad5e79928d34e6aa0ea8a'
   # Libraries a SteamOS (Arch based) install already has, by soname stem. Anything else the
   # engine links against is bundled under lib/. glib, openssl and the C++ runtime are part
   # of the base system there; the rest are their dependencies.
-  SYSTEM_LIBS: 'ld-linux-aarch64|libc|libm|libdl|libpthread|librt|libgcc_s|libstdc\+\+|libatomic|libz|libzstd|libssl|libcrypto|libglib-2\.0|libgobject-2\.0|libgio-2\.0|libgmodule-2\.0|libffi|libpcre2-8|libmount|libblkid|libselinux'
+  SYSTEM_LIBS: 'ld-linux-aarch64|libc|libm|libdl|libpthread|librt|libgcc_s|libstdc\+\+|libatomic|libz|libzstd|libssl|libcrypto|libglib-2\.0|libgobject-2\.0|libgio-2\.0|libgmodule-2\.0|libffi|libdbus-1|libpcre2-8|libmount|libblkid|libselinux'
 
 jobs:
   version:
@@ -111,7 +117,7 @@ jobs:
           d="dist/${name}"
           cp frame/install/install.sh frame/install/uninstall.sh \
              frame/install/earshot-frame-install.py \
-             frame/install/earshot-tetherd.service frame/install/earshot-steamui.service "${d}/"
+             frame/install/earshot-tetherd.service frame/install/earshot-obexd.service frame/install/earshot-steamui.service "${d}/"
           # The helper and the Phone tab (frame/menu): every file there except tests, flat.
           if [ -d frame/menu ]; then
             find frame/menu -maxdepth 1 -type f ! -name 'test_*' -exec cp {} "${d}/" \;
@@ -172,7 +178,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build g++ make pkg-config git ca-certificates \
-            libssl-dev libglib2.0-dev gettext patchelf file binutils
+            libssl-dev libglib2.0-dev libdbus-1-dev libical-dev gettext patchelf file binutils curl xz-utils
           uname -m
           ldd --version | head -n1
           g++ --version | head -n1
@@ -190,6 +196,24 @@ jobs:
       - name: Build
         run: cmake --build build --parallel "$(nproc)" --target tetherd tether_cli
 
+      # obexd from the BlueZ release tarball, pinned by sha256. Only obexd is built: no bluetoothd,
+      # tools, udev, systemd or man pages.
+      - name: Build obexd (BlueZ ${{ env.BLUEZ_VERSION }})
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/bluez"
+          cd "${RUNNER_TEMP}/bluez"
+          curl -fsSL --retry 3 -o "bluez.tar.xz" "https://www.kernel.org/pub/linux/bluetooth/bluez-${BLUEZ_VERSION}.tar.xz"
+          echo "${BLUEZ_SHA256}  bluez.tar.xz" | sha256sum -c -
+          tar -xf bluez.tar.xz
+          cd "bluez-${BLUEZ_VERSION}"
+          ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var             --enable-obex --disable-manpages --disable-tools --disable-monitor --disable-client             --disable-systemd --disable-udev --disable-cups --disable-mesh --disable-midi --disable-hid             --disable-hog --disable-health --disable-sap --disable-a2dp --disable-avrcp --disable-network             --disable-test --disable-deprecated --disable-library --disable-testing             --disable-btpclient --disable-nfc --disable-sixaxis --disable-datafiles --disable-pie
+          make -j"$(nproc)" obexd/src/obexd
+          file obexd/src/obexd
+          mkdir -p "${GITHUB_WORKSPACE}/obexd-build"
+          cp obexd/src/obexd "${GITHUB_WORKSPACE}/obexd-build/obexd"
+          dpkg-query -W libical3 | tee "${GITHUB_WORKSPACE}/obexd-build/libical.version"
+
       - name: Assemble dist/
         env:
           SERVER_URL: ${{ github.server_url }}
@@ -200,8 +224,8 @@ jobs:
           set -eu
           rm -rf dist && mkdir -p dist/earshot-engine/lib
           d=dist/earshot-engine
-          cp build/tetherd build/tether "${d}/"
-          strip --strip-unneeded "${d}/tetherd" "${d}/tether"
+          cp build/tetherd build/tether obexd-build/obexd "${d}/"
+          strip --strip-unneeded "${d}/tetherd" "${d}/tether" "${d}/obexd"
 
           # Bundle every library the engine links that SteamOS does not ship, and what those
           # need in turn. Expected to bundle nothing today; the loop is here so that a future
@@ -209,7 +233,7 @@ jobs:
           : > "${d}/lib/.bundled"
           for round in 1 2 3 4 5 6; do
             added=0
-            for f in "${d}/tetherd" "${d}/tether" "${d}"/lib/*.so*; do
+            for f in "${d}/tetherd" "${d}/tether" "${d}/obexd" "${d}"/lib/*.so*; do
               [ -e "${f}" ] || continue
               while read -r soname path; do
                 [ -n "${path}" ] && [ -f "${path}" ] || continue
@@ -226,7 +250,7 @@ jobs:
             [ "${added}" = 0 ] && break
           done
           # Single quotes: the literal text $ORIGIN/lib must reach patchelf.
-          patchelf --set-rpath '$ORIGIN/lib' "${d}/tetherd" "${d}/tether"
+          patchelf --set-rpath '$ORIGIN/lib' "${d}/tetherd" "${d}/tether" "${d}/obexd"
           for l in "${d}"/lib/*.so*; do
             [ -e "${l}" ] || continue
             strip --strip-unneeded "${l}"
@@ -236,12 +260,12 @@ jobs:
             echo "nothing needed bundling: every library is in the SteamOS baseline"
           fi
           rm -f "${d}/lib/.bundled"
-          rmdir "${d}/lib" 2>/dev/null || true   # kept only when something was bundled
+          [ -f "${d}/lib/libical.so.3" ] || { echo "::error::libical was not bundled for obexd"; exit 1; }
 
           cp LICENSE "${d}/LICENSE"
           echo "${VER}" > "${d}/VERSION"
           {
-            echo "Earshot engine ${VER}: tetherd and tether, built headless (aarch64)."
+            echo "Earshot engine ${VER}: tetherd, tether and obexd, built headless (aarch64)."
             echo "A fork of Tether (https://github.com/zackb/tether, MIT)."
             echo
             echo "  repository: ${SERVER_URL}/${REPOSITORY}"
@@ -259,6 +283,12 @@ jobs:
               echo "No libraries are bundled: everything it links is part of SteamOS."
             fi
             echo "Statically linked from sources fetched by CMake: nlohmann/json (MIT)."
+            echo
+            echo "obexd is BlueZ ${BLUEZ_VERSION} (GPL-2.0-or-later), built unmodified from"
+            echo "  https://www.kernel.org/pub/linux/bluetooth/bluez-${BLUEZ_VERSION}.tar.xz (sha256 ${BLUEZ_SHA256})"
+            echo "  configured with --enable-obex and everything else disabled; only obexd/src/obexd is built."
+            echo "  libical: Ubuntu 24.04 package $(cut -f2 obexd-build/libical.version) (Apache-2.0 OR MPL-2.0), bundled in lib/."
+            echo "  The BlueZ source is at the URL above; the build steps are in the workflow named here."
           } > "${d}/SOURCE.txt"
           cat "${d}/SOURCE.txt"
           ls -lR dist
@@ -271,7 +301,7 @@ jobs:
           d=dist/earshot-engine
           report="${RUNNER_TEMP}/engine-ldd-report.txt"
           : > "${report}"
-          for bin in "${d}/tetherd" "${d}/tether"; do
+          for bin in "${d}/tetherd" "${d}/tether" "${d}/obexd"; do
             echo "=== ${bin}" | tee -a "${report}"
             desc="$(file -b "${bin}")"
             echo "${desc}" | tee -a "${report}"
@@ -305,8 +335,8 @@ jobs:
             local p="$1"; shift
             { objdump -T "$@" 2>/dev/null | grep -o "${p}_[0-9][0-9.]*" || true; } | sed "s/^${p}_//" | sort -uV | tail -n1
           }
-          glibc="$(maxver GLIBC "${d}/tetherd" "${d}/tether")"
-          glibcxx="$(maxver GLIBCXX "${d}/tetherd" "${d}/tether")"
+          glibc="$(maxver GLIBC "${d}/tetherd" "${d}/tether" "${d}/obexd" "${d}"/lib/*.so*)"
+          glibcxx="$(maxver GLIBCXX "${d}/tetherd" "${d}/tether" "${d}/obexd" "${d}"/lib/*.so*)"
           echo "GLIBC_${glibc}  GLIBCXX_${glibcxx}" | tee -a "${report}"
           [[ -n "${glibc}" && -n "${glibcxx}" ]] || fail "could not read the symbol versions"
           [[ "$(printf '%s\n' "${glibc}" "${MAX_GLIBC}" | sort -V | tail -n1)" == "${MAX_GLIBC}" ]] || fail "needs glibc ${glibc}, above SteamOS's ${MAX_GLIBC}"
@@ -320,6 +350,8 @@ jobs:
 
           echo "--- runs" | tee -a "${report}"
           "${d}/tether" --version | tee -a "${report}"
+          "${d}/obexd" --help 2>&1 | head -n3 | tee -a "${report}"
+          readelf -d "${d}/obexd" | grep -q 'Shared library: \[libical' || fail "obexd does not link libical"
           {
             echo "### Earshot engine (aarch64, headless)"
             echo "- highest GLIBC required: ${glibc} (SteamOS has ${MAX_GLIBC}); GLIBCXX ${glibcxx}"
