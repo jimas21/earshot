@@ -115,8 +115,32 @@ class UnitFileTests(unittest.TestCase):
         self.assertIn("After=earshot-tetherd.service", s["Unit"])
         self.assertIn("WantedBy=default.target", s["Install"])
 
+    def test_obexd_unit(self):
+        s = self.sections("earshot-obexd.service")
+        self.assertIn("Type=dbus", s["Service"])
+        self.assertIn("BusName=org.bluez.obex", s["Service"])
+        exec_start = [l for l in s["Service"] if l.startswith("ExecStart=")]
+        self.assertEqual(len(exec_start), 1)
+        self.assertTrue(exec_start[0].startswith("ExecStart=%h/.local/share/earshot/engine/obexd "))
+        self.assertIn(" -n", exec_start[0])  # stay in the foreground for systemd
+        # never offers incoming OBEX file transfer: the server transport plugins are off
+        self.assertIn("-P bluetooth,", exec_start[0])
+        # only starts when nobody else owns org.bluez.obex on the session bus
+        cond = [l for l in s["Service"] if l.startswith("ExecCondition=")]
+        self.assertEqual(len(cond), 1)
+        self.assertIn("busctl --user status org.bluez.obex", cond[0])
+        self.assertIn("'! busctl", cond[0])
+        self.assertIn("WantedBy=default.target", s["Install"])
+        self.assertIn("NoNewPrivileges=yes", s["Service"])
+        self.assertFalse([l for l in s["Service"] if l.startswith("User=")])
+
+    def test_the_engine_unit_starts_obexd_with_it(self):
+        s = self.sections("earshot-tetherd.service")
+        self.assertTrue([l for l in s["Unit"] if l.startswith("Wants=") and "earshot-obexd.service" in l])
+        self.assertIn("After=earshot-obexd.service", s["Unit"])
+
     def test_every_unit_has_the_three_sections(self):
-        for name in ("earshot-tetherd.service", "earshot-steamui.service"):
+        for name in ("earshot-tetherd.service", "earshot-obexd.service", "earshot-steamui.service"):
             self.assertEqual(sorted(self.sections(name)), ["Install", "Service", "Unit"])
 
     def test_nothing_touches_tragus(self):
@@ -157,10 +181,10 @@ class ScriptRunTests(unittest.TestCase):
         self.data = os.path.join(self.home, ".local/share/earshot")
         os.makedirs(os.path.join(self.data, "engine"))
         os.makedirs(os.path.join(self.data, "frame"))
-        for rel in ("engine/tetherd", "engine/tether"):
+        for rel in ("engine/tetherd", "engine/tether", "engine/obexd"):
             with open(os.path.join(self.data, rel), "w") as f:
                 f.write("#!/bin/sh\n")
-        for name in ("earshot-tetherd.service", "earshot-steamui.service", "install.sh", "uninstall.sh"):
+        for name in ("earshot-tetherd.service", "earshot-obexd.service", "earshot-steamui.service", "install.sh", "uninstall.sh"):
             shutil.copy(os.path.join(INSTALL, name), os.path.join(self.data, "frame", name))
         self.flag = os.path.join(self.home, ".steam/steam/.cef-enable-remote-debugging")
 
@@ -179,9 +203,10 @@ class ScriptRunTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(os.path.exists(self.flag))
         self.assertTrue(os.path.exists(os.path.join(self.data, "created-cef-flag")))
-        for name in ("earshot-tetherd.service", "earshot-steamui.service"):
+        for name in ("earshot-tetherd.service", "earshot-obexd.service", "earshot-steamui.service"):
             self.assertTrue(os.path.isfile(os.path.join(self.home, ".config/systemd/user", name)))
-        self.assertIn("--user enable earshot-tetherd.service earshot-steamui.service", self.log())
+        self.assertIn("--user enable earshot-obexd.service earshot-tetherd.service earshot-steamui.service", self.log())
+        self.assertTrue(os.access(os.path.join(self.data, "engine/obexd"), os.X_OK))
         self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.home, ".config/earshot")).st_mode), 0o700)
 
     def test_existing_flag_is_not_ours(self):
@@ -199,7 +224,9 @@ class ScriptRunTests(unittest.TestCase):
         self.assertEqual(self.sh("uninstall.sh").returncode, 0)
         self.assertFalse(os.path.exists(self.flag))
         self.assertFalse(os.path.exists(self.data))
-        self.assertFalse(os.path.exists(os.path.join(self.home, ".config/systemd/user/earshot-tetherd.service")))
+        for name in ("earshot-tetherd.service", "earshot-obexd.service", "earshot-steamui.service"):
+            self.assertFalse(os.path.exists(os.path.join(self.home, ".config/systemd/user", name)))
+        self.assertIn("disable --now earshot-steamui.service earshot-tetherd.service earshot-obexd.service", self.log())
         self.assertTrue(os.path.isdir(os.path.join(self.home, ".config/earshot")))  # settings kept
 
     def test_uninstall_leaves_the_flag_while_tragus_is_installed(self):
@@ -223,6 +250,18 @@ class ScriptRunTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(os.path.exists(self.flag))
         self.assertIn(".steam/steam", r.stderr)
+
+    def test_install_fails_when_obexd_is_missing(self):
+        os.remove(os.path.join(self.data, "engine/obexd"))
+        r = self.sh("install.sh")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("obexd", r.stderr)
+
+    def test_purge_leaves_no_obexd_behind(self):
+        self.sh("install.sh")
+        self.assertEqual(self.sh("uninstall.sh", "--purge").returncode, 0)
+        self.assertFalse(os.path.exists(os.path.join(self.data, "engine/obexd")))
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".config/systemd/user/earshot-obexd.service")))
 
     def test_install_fails_when_the_engine_is_missing(self):
         os.remove(os.path.join(self.data, "engine/tetherd"))
@@ -320,6 +359,18 @@ class DocsAndCiTests(unittest.TestCase):
         for name in ("cryptography==", "cffi==", "pycparser=="):
             self.assertIn(name, reqs)
         self.assertGreaterEqual(reqs.count("--hash=sha256:"), 3)
+
+    def test_the_engine_tarball_builds_and_checks_obexd(self):
+        wf = self.text(".github", "workflows", "earshot-arm64.yml")
+        self.assertIn("BLUEZ_SHA256: '", wf)
+        self.assertIn("sha256sum -c -", wf)
+        self.assertIn("obexd/src/obexd", wf)
+        self.assertIn('"${d}/obexd"', wf)
+        # the same ldd / glibc / RUNPATH checks that cover the engine cover obexd
+        self.assertIn('for bin in "${d}/tetherd" "${d}/tether" "${d}/obexd"; do', wf)
+        self.assertIn("patchelf --set-rpath '$ORIGIN/lib' \"${d}/tetherd\" \"${d}/tether\" \"${d}/obexd\"", wf)
+        # the unit installed by the frame package is the one in the tarball
+        self.assertIn("frame/install/earshot-obexd.service", wf)
 
     def test_both_tarballs_carry_the_version_the_installer_checks(self):
         wf = self.text(".github", "workflows", "earshot-arm64.yml")

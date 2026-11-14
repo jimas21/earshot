@@ -1,0 +1,31 @@
+# BlueZ's obexd as a systemd --user service (installed by install.sh). SteamOS ships none; Earshot's engine
+# needs it on the session bus (org.bluez.obex) to read and send texts (MAP) and read contacts (PBAP).
+# The binary is built from the official BlueZ release by the project's CI and sits next to the engine.
+# Only the client side is wanted: the server plugins that would listen for incoming OBEX file transfers
+# (bluetooth, opp, ftp, pcsuite, syncevolution) are switched off.
+[Unit]
+Description=Earshot obexd (BlueZ OBEX client service for texts and contacts)
+Documentation=https://github.com/jimas21/earshot
+After=dbus.socket
+Wants=dbus.socket
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=dbus
+BusName=org.bluez.obex
+# Never fight another obexd (a system one, or one started by hand): start only when nobody owns the name.
+# Exit status 1 skips the start quietly; it does not count as a failure.
+ExecCondition=/bin/sh -c '! busctl --user status org.bluez.obex >/dev/null 2>&1'
+ExecStart=%h/.local/share/earshot/engine/obexd -n -P bluetooth,opp,ftp,pcsuite,syncevolution
+UnsetEnvironment=LD_LIBRARY_PATH LD_PRELOAD
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+SyslogIdentifier=earshot-obexd
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=default.target

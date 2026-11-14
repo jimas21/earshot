@@ -17,8 +17,8 @@ units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 flag="$HOME/.steam/steam/.cef-enable-remote-debugging"
 marker="$data/created-cef-flag"
 
-systemctl --user disable --now earshot-steamui.service earshot-tetherd.service 2>/dev/null
-rm -f "$units/earshot-tetherd.service" "$units/earshot-steamui.service"
+systemctl --user disable --now earshot-steamui.service earshot-tetherd.service earshot-obexd.service 2>/dev/null
+rm -f "$units/earshot-tetherd.service" "$units/earshot-obexd.service" "$units/earshot-steamui.service"
 systemctl --user daemon-reload 2>/dev/null
 
 # Take the Phone tab out of Steam's open pages (the stopped helper can no longer do it).

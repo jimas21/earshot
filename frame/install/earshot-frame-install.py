@@ -467,6 +467,13 @@ def health_check(engine_dir):
     if r.returncode != 0:
         msg = r.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no output"]
         raise InstallError(f"the new engine does not start ({msg[0]}); keeping the old one")
+    # obexd (texts and contacts) must load its bundled libical too; `--help` exits 0 without touching Bluetooth.
+    obexd = os.path.join(engine_dir, "obexd")
+    if os.path.exists(obexd):
+        r = subprocess.run([obexd, "--help"], env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if r.returncode != 0:
+            msg = r.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no output"]
+            raise InstallError(f"the new obexd does not start ({msg[0]}); keeping the old engine")
 
 
 def run_install_sh():
@@ -482,7 +489,7 @@ def restart_services():
     """Best effort: bring the (old) services back after a failed update."""
     if shutil.which("systemctl") is None:
         return
-    for unit in ("earshot-tetherd.service", "earshot-steamui.service"):
+    for unit in ("earshot-obexd.service", "earshot-tetherd.service", "earshot-steamui.service"):
         subprocess.run(["systemctl", "--user", "restart", "--no-block", unit],
                        env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

@@ -6,7 +6,8 @@
 Description=Earshot engine (iPhone calls, texts and notifications over Bluetooth)
 Documentation=https://github.com/jimas21/earshot
 After=dbus.socket
-Wants=dbus.socket
+Wants=dbus.socket earshot-obexd.service
+After=earshot-obexd.service
 StartLimitIntervalSec=120
 StartLimitBurst=5
 

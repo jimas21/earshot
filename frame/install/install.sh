@@ -10,14 +10,14 @@ src="$data/frame"
 flag="$HOME/.steam/steam/.cef-enable-remote-debugging"
 marker="$data/created-cef-flag"
 
-for f in "$data/engine/tetherd" "$data/engine/tether" "$src/earshot-tetherd.service" "$src/earshot-steamui.service"; do
+for f in "$data/engine/tetherd" "$data/engine/tether" "$data/engine/obexd" "$src/earshot-tetherd.service" "$src/earshot-obexd.service" "$src/earshot-steamui.service"; do
     [ -f "$f" ] || { echo "error: $f is missing" >&2; exit 1; }
 done
-chmod 755 "$data/engine/tetherd" "$data/engine/tether"
+chmod 755 "$data/engine/tetherd" "$data/engine/tether" "$data/engine/obexd"
 
 mkdir -p "$units" "${XDG_CONFIG_HOME:-$HOME/.config}/earshot"
 chmod 700 "${XDG_CONFIG_HOME:-$HOME/.config}/earshot"
-cp -f "$src/earshot-tetherd.service" "$src/earshot-steamui.service" "$units/"
+cp -f "$src/earshot-tetherd.service" "$src/earshot-obexd.service" "$src/earshot-steamui.service" "$units/"
 
 # The Phone tab reaches Steam's UI through its DevTools endpoint, which Steam only opens
 # when this file exists. Tragus needs it too: record that we made it, so uninstall removes
@@ -50,9 +50,9 @@ if [ ! -f "$wpconf" ] || [ "$(cat "$wpconf")" != "$wpnew" ]; then
 fi
 
 systemctl --user daemon-reload
-systemctl --user enable earshot-tetherd.service earshot-steamui.service
-systemctl --user reset-failed earshot-tetherd.service earshot-steamui.service 2>/dev/null || true
-systemctl --user restart --no-block earshot-tetherd.service earshot-steamui.service
+systemctl --user enable earshot-obexd.service earshot-tetherd.service earshot-steamui.service
+systemctl --user reset-failed earshot-obexd.service earshot-tetherd.service earshot-steamui.service 2>/dev/null || true
+systemctl --user restart --no-block earshot-obexd.service earshot-tetherd.service earshot-steamui.service
 
 # The engine waits up to 30 s for Bluetooth before it starts; wait for it. Right after a
 # --no-block restart it can still read "inactive", so only "active" or "failed" end the wait.
