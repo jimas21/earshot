@@ -622,3 +622,81 @@ test('teardown removes the Phone tab count with the tab', () => {
   p.w.__earshotMenu.teardown();
   assert.equal(p.doc.querySelector('.es-tabbadge'), null);
 });
+
+// ---------- the Phone tab stays last in the strip ----------
+const stripIds = (p) => [...p.doc.getElementById('strip').children].map((c) => c.id);
+const addTab = (p, id) => { const d = p.doc.createElement('div'); d.id = id; p.doc.getElementById('strip').appendChild(d); return d; };
+// Records every tab the strip is asked to move (appendChild, insertBefore, ...) by id.
+function watchStrip(p) {
+  const strip = p.doc.getElementById('strip');
+  const moved = [];
+  for (const m of ['appendChild', 'insertBefore', 'removeChild', 'append', 'prepend', 'replaceChild']) {
+    const orig = strip[m].bind(strip);
+    strip[m] = (...a) => { moved.push(a[0] && a[0].id); return orig(...a); };
+  }
+  return moved;
+}
+
+test('the Phone tab is last when there is no other add-on, and stays put', async () => {
+  const p = page('popup', POPUP_HTML);
+  inject(p);
+  assert.deepEqual(stripIds(p), ['t1', 't2', 'earshot-qam-tab']);
+  const moved = watchStrip(p);
+  for (let i = 0; i < 3; i++) p.w.__earshotMenu.ensure();
+  await tick();
+  assert.deepEqual(stripIds(p), ['t1', 't2', 'earshot-qam-tab']);
+  assert.deepEqual(moved, []);                                              // nothing was reordered
+});
+
+test('another tab appended after ours: ours goes back to the end at once, theirs is never moved', async () => {
+  const p = page('popup', POPUP_HTML);
+  inject(p);
+  const moved = watchStrip(p);
+  const airpods = addTab(p, 'magicpods-tab');                               // Tragus's tab, added after ours
+  await Promise.resolve();                                                  // the strip's own observer: a microtask, before any paint
+  assert.deepEqual(stripIds(p), ['t1', 't2', 'magicpods-tab', 'earshot-qam-tab']);
+  assert.equal(p.doc.getElementById('strip').children[2], airpods);
+  addTab(p, 'someone-elses-tab');                                           // any other add-on, whatever its id
+  await Promise.resolve();
+  assert.deepEqual(stripIds(p), ['t1', 't2', 'magicpods-tab', 'someone-elses-tab', 'earshot-qam-tab']);
+  assert.deepEqual(moved.filter((id) => id !== 'earshot-qam-tab'), ['magicpods-tab', 'someone-elses-tab']);   // only the appends the others made themselves
+});
+
+test('the injection pass also puts it last, and a correct order is stable on every open', async () => {
+  const p = page('popup', POPUP_HTML);
+  inject(p);
+  addTab(p, 'magicpods-tab');
+  p.w.__earshotMenu.ensure();                                               // even before the observer has run
+  assert.deepEqual(stripIds(p), ['t1', 't2', 'magicpods-tab', 'earshot-qam-tab']);
+  await tick();
+  const moved = watchStrip(p);
+  for (let i = 0; i < 5; i++) { p.w.__earshotMenu.ensure(); await tick(); }
+  assert.deepEqual(stripIds(p), ['t1', 't2', 'magicpods-tab', 'earshot-qam-tab']);
+  assert.deepEqual(moved, []);
+  // Steam re-renders the strip: both add-ons are re-added, Tragus's last, ours has to follow
+  const strip = p.doc.getElementById('strip');
+  const ours = p.doc.getElementById('earshot-qam-tab'), theirs = p.doc.getElementById('magicpods-tab');
+  ours.remove(); theirs.remove();
+  strip.appendChild(ours); strip.appendChild(theirs);
+  await tick();
+  assert.deepEqual(stripIds(p), ['t1', 't2', 'magicpods-tab', 'earshot-qam-tab']);
+});
+
+test('moving our tab does not set the observer off again', async () => {
+  const p = page('popup', POPUP_HTML);
+  inject(p);
+  const moved = watchStrip(p);
+  addTab(p, 'magicpods-tab');
+  await tick(); await tick();
+  assert.deepEqual(moved.filter((id) => id === 'earshot-qam-tab').length, 1);   // exactly one correction, no ping-pong
+  assert.deepEqual(stripIds(p), ['t1', 't2', 'magicpods-tab', 'earshot-qam-tab']);
+});
+
+test('teardown stops watching the strip', async () => {
+  const p = page('popup', POPUP_HTML);
+  inject(p);
+  p.w.__earshotMenu.teardown();
+  addTab(p, 'magicpods-tab');
+  await tick();
+  assert.deepEqual(stripIds(p), ['t1', 't2', 'magicpods-tab']);
+});

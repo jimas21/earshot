@@ -680,6 +680,25 @@
     tab.setAttribute('aria-label', 'Phone, ' + n + ' new notification' + (n === 1 ? '' : 's'));
   }
 
+  // Our tab is always the last child of the strip, whatever else adds a tab (Tragus's AirPods tab or any other
+  // add-on): when something lands after it, it goes back to the end at once and nobody else's tab is ever moved.
+  // Steam re-renders the strip and each injector re-adds its tab when its own timer fires, so this runs on every
+  // pass and from a MutationObserver on the strip (before the next paint, so nothing visibly jumps). It only moves
+  // the tab when it is not already last, so our own move does not set it off again.
+  function keepLast(strip) {
+    const tab = document.getElementById(TAB_ID);
+    if (tab && tab.parentElement === strip && strip.lastElementChild !== tab) strip.appendChild(tab);
+  }
+  let orderObserver = null, observedStrip = null;
+  function watchOrder(strip) {
+    if (observedStrip === strip) return;
+    if (orderObserver) orderObserver.disconnect();
+    observedStrip = strip;
+    orderObserver = new MutationObserver(() => keepLast(strip));
+    orderObserver.observe(strip, { childList: true });
+  }
+  cleanups.push(() => { if (orderObserver) orderObserver.disconnect(); orderObserver = null; observedStrip = null; });
+
   function ensurePopup() {
     const p = popupParts();
     reportPresence(!!p);
@@ -705,6 +724,8 @@
       tab.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); setMenuOpen(true); });
       strip.appendChild(tab);
     }
+    keepLast(strip);
+    watchOrder(strip);
     const n = strip.children.length;
     for (const t of strip.children) {
       if (t.id !== TAB_ID && !tabStyles.has(t)) tabStyles.set(t, { width: t.style.width, minWidth: t.style.minWidth, flex: t.style.flex });
