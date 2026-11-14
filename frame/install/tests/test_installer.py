@@ -503,7 +503,7 @@ class FlowTests(unittest.TestCase):
             self._run()
             rc, st = self._main()
         self.assertEqual((rc, st["state"]), (0, "uptodate"))
-        self.assertEqual(st["message"], "Up to date (version v1.2.0)")
+        self.assertEqual(st["message"], "Up to date (version 1.2.0)")
 
     def test_a_newer_release_says_so_before_it_updates(self):
         with mock.patch.object(ei, "run_install_sh", lambda: None):

@@ -45,7 +45,7 @@ env:
   # Libraries a SteamOS (Arch based) install already has, by soname stem. Anything else the
   # engine links against is bundled under lib/. glib, openssl and the C++ runtime are part
   # of the base system there; the rest are their dependencies.
-  SYSTEM_LIBS: 'ld-linux-aarch64|libc|libm|libdl|libpthread|librt|libgcc_s|libstdc\+\+|libatomic|libz|libzstd|libssl|libcrypto|libglib-2\.0|libgobject-2\.0|libgio-2\.0|libgmodule-2\.0|libffi|libdbus-1|libpcre2-8|libmount|libblkid|libselinux'
+  SYSTEM_LIBS: 'ld-linux-aarch64|libc|libm|libdl|libpthread|librt|libgcc_s|libstdc\+\+|libatomic|libz|libzstd|libssl|libcrypto|libglib-2\.0|libgobject-2\.0|libgio-2\.0|libgmodule-2\.0|libffi|libdbus-1|libsystemd|libcap|libgcrypt|libgpg-error|liblz4|liblzma|libpcre2-8|libmount|libblkid|libselinux'
 
 jobs:
   version:
@@ -230,7 +230,7 @@ jobs:
           file obexd/src/obexd
           mkdir -p "${GITHUB_WORKSPACE}/obexd-build"
           cp obexd/src/obexd "${GITHUB_WORKSPACE}/obexd-build/obexd"
-          dpkg-query -W libical3 | tee "${GITHUB_WORKSPACE}/obexd-build/libical.version"
+          dpkg-query -W libical3t64 | tee "${GITHUB_WORKSPACE}/obexd-build/libical.version"
 
       - name: Assemble dist/
         env:
@@ -368,7 +368,8 @@ jobs:
 
           echo "--- runs" | tee -a "${report}"
           "${d}/tether" --version | tee -a "${report}"
-          "${d}/obexd" --help 2>&1 | head -n3 | tee -a "${report}"
+          ob="$("${d}/obexd" --help 2>&1)" || fail "obexd --help failed: ${ob}"
+          head -n3 <<<"${ob}" | tee -a "${report}"
           readelf -d "${d}/obexd" | grep -q 'Shared library: \[libical' || fail "obexd does not link libical"
           {
             echo "### Earshot engine (aarch64, headless)"

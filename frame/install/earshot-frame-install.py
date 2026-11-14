@@ -506,7 +506,7 @@ def install(args, status):
         todo = components_to_update(installed, tag, args.if_newer)
         if not todo:
             print("Earshot is up to date.")
-            status.set("uptodate", f"Up to date (version {tag})")
+            status.set("uptodate", f"Up to date (version {version_of(tag)})")
             return
         status.set("updating", f"Update available: {tag} - updating...")
         stage_parent = args.download_only or DATA_DIR
