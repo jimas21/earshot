@@ -41,6 +41,11 @@ namespace tether::bluetooth {
     // GATT discovery on a freshly opened link, which runs to about a minute.
     inline constexpr int ANCS_ABSENT_GRACE_SECONDS = 75;
 
+    // How long messages and contacts wait, after the Classic link comes up, for ANCS to come up first.
+    // Opening MAP and PBAP straight away, while the iPhone was still refusing them, was followed by the
+    // iPhone dropping the LE link that carries notifications, and not reopening it (2026-11-13).
+    inline constexpr int OBEX_AFTER_LINK_GRACE_SECONDS = 30;
+
     // How long every bearer must stay down, after a link supervision timeout,
     // before the phone counts as gone rather than flapping.
     inline constexpr int AWAY_LOCK_GRACE_SECONDS = 30;
@@ -114,6 +119,14 @@ namespace tether::bluetooth {
         should_solicit_ancs(bool ancs_enabled, const BearerStatus& bearer, int64_t now, int64_t ancs_absent_since) {
         const bool link_dead = ancs_absent_since >= 0 && now - ancs_absent_since >= ANCS_ABSENT_GRACE_SECONDS;
         return ancs_enabled && bearer.le_available && !bearer.le_dialling && (!bearer.le_connected || link_dead);
+    }
+
+    // Whether messages and contacts wait for notifications. `link_ready_since` is when the Classic link
+    // came up, or -1 while it is down. Only while ANCS is wanted and not yet up, and never for longer
+    // than the grace: a phone that never shares notifications still gets its texts.
+    inline bool should_defer_obex(bool ancs_enabled, bool ancs_ready, int64_t now, int64_t link_ready_since) {
+        return ancs_enabled && !ancs_ready && link_ready_since >= 0 &&
+               now - link_ready_since < OBEX_AFTER_LINK_GRACE_SECONDS;
     }
 
     // Whether the ANCS client keeps its device path. Without a populated
