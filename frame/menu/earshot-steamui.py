@@ -1793,6 +1793,11 @@ class Helper:
                     and self.loop.clock() - self.ancs_ready_at < self.settle_seconds)
         if is_new and not settling and not msg.get("pre_existing") and not msg.get("silent"):
             self.toast_notification(msg)
+            log.info("notification %s: popup %s", uid, "shown" if self.can_toast(msg.get("app_id")) else
+                     "held (alerts off, headset not active, or app muted)")
+        else:
+            log.info("notification %s: no popup (%s)", uid, "seen before" if not is_new else
+                     "settling" if settling else "already on the phone" if msg.get("pre_existing") else "silent")
         self.dirty()
 
     def t_bt_notification_removed(self, msg):
@@ -2000,6 +2005,9 @@ class Helper:
 
     # ----- SteamVR notifications -----
 
+    def map_open(self):
+        return bool(self.conn.get("map_open"))
+
     def can_toast(self, app_id=None):
         return (self.settings.get("alerts") and self.frame_active()
                 and not (app_id and app_id in self.settings.get("muted_apps")))
@@ -2011,8 +2019,12 @@ class Helper:
 
     def toast_notification(self, n):
         app_id = n.get("app_id") or ""
-        if app_id == MAP_APP_ID or n.get("category") == ANCS_CATEGORY_INCOMING_CALL or not self.can_toast(app_id):
-            return  # messages come over MAP; calls get their own, unthrottled toast
+        # Texts come over MAP when it is open, with the sender and a reply button; without MAP (no obexd, or the
+        # iPhone never offered Message Access) the notification is the only way a text reaches the headset.
+        if app_id == MAP_APP_ID and self.map_open():
+            return
+        if n.get("category") == ANCS_CATEGORY_INCOMING_CALL or not self.can_toast(app_id):
+            return  # calls get their own, unthrottled toast
         app = trim(n.get("app_name") or app_id or "iPhone", 40)
         detail = " - ".join(x for x in (n.get("title"), n.get("body") or n.get("subtitle")) if x)
         text = self.toast_text(app, detail) if self.settings.get("preview") else app + ": new notification"

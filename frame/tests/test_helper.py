@@ -443,13 +443,20 @@ class FilterTests(unittest.TestCase):
         rig.settle_for(0.2)
         self.assertEqual(len(rig.vrcmd_texts()), 1)
 
-    def test_messages_app_notifications_never_toast(self):
+    def test_messages_app_notifications_toast_only_without_map(self):
         rig = Rig(self)
         rig.start()
+        rig.helper.conn = dict(rig.helper.conn, map_open=False)
+        # No Message Access: the notification is the only way the text reaches the headset.
         rig.tether.push(notif(34, app_id="com.apple.MobileSMS", app="Messages"))
+        self.assertTrue(rig.pump(lambda: rig.vrcmd_texts(), 2))
+        self.assertEqual(len(rig.vrcmd_texts()), 1)
+        # With MAP open, texts arrive over MAP with the sender and a reply, so the notification stays quiet.
+        rig.helper.conn = dict(rig.helper.conn, map_open=True)
+        rig.tether.push(notif(35, app_id="com.apple.MobileSMS", app="Messages"))
         rig.settle_for(0.2)
-        self.assertEqual(rig.vrcmd_texts(), [])
-        self.assertIn(34, rig.helper.notifications)
+        self.assertEqual(len(rig.vrcmd_texts()), 1)
+        self.assertIn(35, rig.helper.notifications)
 
     def test_backlog_is_not_toasted(self):
         rig = Rig(self, settle_seconds=60.0)

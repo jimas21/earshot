@@ -45,6 +45,13 @@ if [ -f "$marker" ]; then
     fi
 fi
 
+# Give the headset its phone-audio roles back.
+wpconf="${XDG_CONFIG_HOME:-$HOME/.config}/wireplumber/wireplumber.conf.d/51-earshot-no-phone-audio.conf"
+if [ -f "$wpconf" ]; then
+    rm -f "$wpconf"
+    systemctl --user try-restart wireplumber.service 2>/dev/null || true
+fi
+
 rm -rf "$data"
 rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/earshot"
 # The engine's own data (messages, contacts, its settings and key): the service file puts it at a fixed place

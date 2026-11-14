@@ -32,6 +32,23 @@ else
     echo "note: ~/.steam/steam was not found; start Steam once, then run this again." >&2
 fi
 
+# The headset must never act as the phone's Bluetooth headset or speaker: an iPhone that sees an audio sink or a
+# Hands-Free unit routes its microphone there, and this headset's Bluetooth chip cannot carry that audio. Keep
+# only the roles earbuds and headphones paired to the headset use. A user-level WirePlumber setting.
+wpdir="${XDG_CONFIG_HOME:-$HOME/.config}/wireplumber/wireplumber.conf.d"
+wpconf="$wpdir/51-earshot-no-phone-audio.conf"
+wpnew="$(printf '%s\n' \
+    "# Written by Earshot; removed when Earshot is uninstalled. The headset never acts as a phone's" \
+    "# Bluetooth headset or speaker. Earbuds and headphones paired to the headset are unaffected." \
+    "monitor.bluez.properties = {" \
+    "  bluez5.roles = [ a2dp_source bap_source hfp_ag ]" \
+    "}")"
+if [ ! -f "$wpconf" ] || [ "$(cat "$wpconf")" != "$wpnew" ]; then
+    mkdir -p "$wpdir"
+    printf '%s\n' "$wpnew" > "$wpconf"
+    systemctl --user try-restart wireplumber.service 2>/dev/null || true
+fi
+
 systemctl --user daemon-reload
 systemctl --user enable earshot-tetherd.service earshot-steamui.service
 systemctl --user reset-failed earshot-tetherd.service earshot-steamui.service 2>/dev/null || true

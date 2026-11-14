@@ -22,6 +22,9 @@ Environment=TETHER_LOG_STDERR=1
 Environment=TETHER_NO_TCP=1
 # A normal user on the stock BlueZ: phone-initiated pairing, no experimental mode, no class change.
 Environment=TETHER_NO_ROOT=1
+# No calls in this version: the engine never asks the phone for Hands-Free and never registers a Hands-Free
+# record, so the iPhone cannot route its microphone or audio to the headset.
+Environment=TETHER_CALLS=0
 # The headset keeps no copy of the phone's messages or contacts on disk.
 Environment=TETHER_RETENTION=none
 # The engine's settings, key and state live in Earshot's own directories, never in the ones a separately
