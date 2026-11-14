@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether 0.3.5\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 15:13-0800\n"
+"POT-Creation-Date: 2026-11-13 16:29-0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1177,6 +1177,14 @@ msgid ""
 "turn Bluetooth off and back on on the iPhone, which clears this even when "
 "Share System Notifications is already on. Messages and contacts are "
 "unaffected."
+msgstr ""
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Notifications are connected."
+msgstr ""
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Waiting for the iPhone to reconnect over Bluetooth..."
 msgstr ""
 
 #: src/core/src/bluetooth/bearer_supervisor.cpp

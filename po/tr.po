@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 15:13-0800\n"
+"POT-Creation-Date: 2026-11-13 16:29-0800\n"
 "PO-Revision-Date: 2026-08-23\n"
 "Last-Translator: Tether project\n"
 "Language-Team: Turkish\n"
@@ -1300,6 +1300,14 @@ msgstr ""
 "iPhone'da Bluetooth'u kapatıp yeniden açın; bu, \"Sistem Bildirimlerini "
 "Paylaş\" zaten açık olsa bile sorunu giderir. Mesajlar ve kişiler bundan "
 "etkilenmez."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Notifications are connected."
+msgstr "Bildirimler bağlı."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Waiting for the iPhone to reconnect over Bluetooth..."
+msgstr "iPhone'un Bluetooth ile yeniden bağlanması bekleniyor..."
 
 #: src/core/src/bluetooth/bearer_supervisor.cpp
 msgid ""

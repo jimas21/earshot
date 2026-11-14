@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 15:13-0800\n"
+"POT-Creation-Date: 2026-11-13 16:29-0800\n"
 "PO-Revision-Date: 2026-08-22\n"
 "Last-Translator: Tether project\n"
 "Language-Team: French\n"
@@ -1322,6 +1322,14 @@ msgstr ""
 "désactivez puis réactivez le Bluetooth sur l'iPhone, ce qui règle le "
 "problème même si « Partager les notifications système » est déjà activé. Les "
 "messages et les contacts ne sont pas affectés."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Notifications are connected."
+msgstr "Les notifications sont connectées."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Waiting for the iPhone to reconnect over Bluetooth..."
+msgstr "En attente de la reconnexion de l'iPhone par Bluetooth..."
 
 #: src/core/src/bluetooth/bearer_supervisor.cpp
 msgid ""

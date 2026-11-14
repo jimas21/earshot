@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 15:13-0800\n"
+"POT-Creation-Date: 2026-11-13 16:29-0800\n"
 "PO-Revision-Date: 2026-08-23\n"
 "Last-Translator: Tether project\n"
 "Language-Team: Czech\n"
@@ -1302,6 +1302,14 @@ msgstr ""
 "iPhone neodpovídá na LE. Jeho Bluetooth se zaseklo na jeho straně: vypněte a "
 "znovu zapněte Bluetooth na iPhonu, což to vyřeší i tehdy, když je „Sdílet "
 "systémová oznámení“ už zapnuté. Zpráv a kontaktů se to netýká."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Notifications are connected."
+msgstr "Oznámení jsou připojena."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Waiting for the iPhone to reconnect over Bluetooth..."
+msgstr "Čeká se, až se iPhone znovu připojí přes Bluetooth..."
 
 #: src/core/src/bluetooth/bearer_supervisor.cpp
 msgid ""

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 15:13-0800\n"
+"POT-Creation-Date: 2026-11-13 16:29-0800\n"
 "PO-Revision-Date: 2026-08-23\n"
 "Last-Translator: Tether project\n"
 "Language-Team: Japanese\n"
@@ -1302,6 +1302,14 @@ msgstr ""
 "iPhone が LE で応答していません。iPhone 側で Bluetooth がスタックしています。"
 "iPhone の Bluetooth をオフにしてからオンに戻してください。「システム通知を共"
 "有」がすでにオンでもこれで解消します。メッセージと連絡先には影響しません。"
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Notifications are connected."
+msgstr "通知は接続されています。"
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Waiting for the iPhone to reconnect over Bluetooth..."
+msgstr "iPhone が Bluetooth で再接続するのを待っています..."
 
 #: src/core/src/bluetooth/bearer_supervisor.cpp
 msgid ""

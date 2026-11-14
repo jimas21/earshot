@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 15:13-0800\n"
+"POT-Creation-Date: 2026-11-13 16:29-0800\n"
 "PO-Revision-Date: 2026-08-23\n"
 "Last-Translator: Tether project\n"
 "Language-Team: Polish\n"
@@ -1316,6 +1316,14 @@ msgstr ""
 "wyłącz i włącz Bluetooth na iPhonie, co rozwiązuje problem nawet wtedy, gdy "
 "„Udostępniaj powiadomienia systemowe” jest już włączone. Nie wpływa to na "
 "wiadomości i kontakty."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Notifications are connected."
+msgstr "Powiadomienia są połączone."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Waiting for the iPhone to reconnect over Bluetooth..."
+msgstr "Oczekiwanie na ponowne połączenie iPhone'a przez Bluetooth..."
 
 #: src/core/src/bluetooth/bearer_supervisor.cpp
 msgid ""

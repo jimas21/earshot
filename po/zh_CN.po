@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 15:13-0800\n"
+"POT-Creation-Date: 2026-11-13 16:29-0800\n"
 "PO-Revision-Date: 2026-08-23\n"
 "Last-Translator: Tether project\n"
 "Language-Team: Simplified Chinese\n"
@@ -1248,6 +1248,14 @@ msgid ""
 msgstr ""
 "iPhone 在 LE 上没有响应。它的蓝牙在自己一侧卡住了：在 iPhone 上关闭蓝牙再重新"
 "打开，即使“共享系统通知”已经开启，这样做也能解决。信息和通讯录不受影响。"
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Notifications are connected."
+msgstr "通知已连接。"
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Waiting for the iPhone to reconnect over Bluetooth..."
+msgstr "正在等待 iPhone 通过蓝牙重新连接..."
 
 #: src/core/src/bluetooth/bearer_supervisor.cpp
 msgid ""

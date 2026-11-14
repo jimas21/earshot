@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 15:13-0800\n"
+"POT-Creation-Date: 2026-11-13 16:29-0800\n"
 "PO-Revision-Date: 2026-08-23\n"
 "Last-Translator: Tether project\n"
 "Language-Team: Dutch\n"
@@ -1313,6 +1313,14 @@ msgstr ""
 "schakel Bluetooth op de iPhone uit en weer in, wat dit oplost zelfs als "
 "\"Deel systeemmeldingen\" al aanstaat. Berichten en contacten hebben er geen "
 "last van."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Notifications are connected."
+msgstr "Meldingen zijn verbonden."
+
+#: src/core/src/bluetooth/bearer_supervisor.cpp
+msgid "Waiting for the iPhone to reconnect over Bluetooth..."
+msgstr "Wachten tot de iPhone opnieuw verbinding maakt via Bluetooth..."
 
 #: src/core/src/bluetooth/bearer_supervisor.cpp
 msgid ""
