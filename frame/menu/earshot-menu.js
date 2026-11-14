@@ -79,6 +79,7 @@
   function setState(next) {
     if (dead) return;
     S = next;
+    maybeOpenForPair();
     render();
   }
 
@@ -154,6 +155,12 @@
   .es-pbtn.es-blue { background:#1a9fff; } .es-pbtn.es-go { background:#3c9d2f; } .es-pbtn.es-stop { background:#c0392b; }
   .es-pbtn.es-quiet { background:#23262e; color:#b8bcbf; font-weight:400; font-size:15px; min-height:48px; }
   .es-pbtn:disabled { opacity:.45; cursor:default; }
+  #earshot-pair:empty, .es-tabs:empty { display:none; }
+  .es-pair.es-confirm { padding-top:2px; }
+  .es-confirm .es-ph { font-size:16px; text-align:center; color:#9fd58f; margin:4px 0 0; }
+  .es-confirm .es-code { font-size:clamp(56px,16vw,96px); line-height:1.05; white-space:nowrap; margin:2px 0 6px; }
+  .es-prow { display:flex; gap:10px; }
+  .es-prow .es-pbtn { flex:2; margin:4px 0 8px; } .es-prow .es-pbtn.es-go { flex:3; }
   .es-pdev { display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%; box-sizing:border-box; min-height:60px; margin:6px 0; padding:10px 16px; border:0; border-radius:6px; background:#23262e; color:#fff; font:inherit; font-size:18px; text-align:left; cursor:pointer; }
   .es-pdev .es-tag { font-size:12px; color:#8b929a; white-space:nowrap; }
   .es-pdev.es-phone { background:#1b3a55; }
@@ -453,8 +460,8 @@
         break;
       case 'confirm':
         h = phead('Check the code') + `<div class="es-code">${esc(spaced(p.code))}</div>` +
-          '<div class="es-pstep">Check the iPhone shows the same code, then tap <b>Pair</b> on the iPhone and <b>Confirm</b> here.</div>' +
-          pbtn('pair-confirm', 'Confirm', 'es-go', ` data-a="${esc(p.op)}"`) + pbtn('pair-close', 'Cancel', 'es-stop');
+          '<div class="es-prow">' + pbtn('pair-confirm', 'Confirm', 'es-go', ` data-a="${esc(p.op)}"`) + pbtn('pair-close', 'Not this code', 'es-stop') + '</div>' +
+          '<div class="es-pstep">Check the iPhone shows the same code, then tap <b>Pair</b> on the iPhone and <b>Confirm</b> here.</div>';
         break;
       case 'failed':
         h = phead(p.title) + `<div class="es-ptext" style="font-size:16px">${esc(p.text)}</div>` +
@@ -490,7 +497,7 @@
       default:
         h = phead('Pairing') + pbtn('pair-close', 'Close', 'es-quiet');
     }
-    return `<div class="es-pair" data-phase="${esc(p.phase)}">${h}</div>`;
+    return `<div class="es-pair${p.phase === 'confirm' ? ' es-confirm' : ''}" data-phase="${esc(p.phase)}">${h}</div>`;
   }
 
   // The countdown is the only thing that moves without a state push.
@@ -516,6 +523,15 @@
   const tabStyles = new Map();
   let stripListener = null, listenedStrip = null;
   let wantOpenUntil = 0;
+  // A popup page that appears while a pairing is going on (the quick menu was closed and opened again, or
+  // opened on one of Steam's own tabs) opens straight on the Phone tab, at the pairing panel.
+  let pendingPairOpen = true, lastPairPhase = null;
+  function maybeOpenForPair() {
+    if (ROLE !== 'popup' || !pendingPairOpen || !S || !S.pair || menuOpen) return;
+    if (!document.getElementById(OVERLAY_ID) || !popupParts()) return;
+    pendingPairOpen = false;
+    setMenuOpen(true);
+  }
 
   function popupParts() {
     const panel = document.querySelector('[role="tabpanel"]');
@@ -563,7 +579,11 @@
   function ensurePopup() {
     const p = popupParts();
     reportPresence(!!p);
-    if (!p) { menuOpen = false; return; }  // popup closed: next open shows Steam's own tab
+    if (!p) {  // popup closed: next open shows Steam's own tab
+      menuOpen = false; pendingPairOpen = true; fresh.clear();
+      const gone = document.getElementById(OVERLAY_ID); if (gone) gone.classList.remove('es-open');
+      return;
+    }
     ensureStyle();
     const { strip, stripWrap, root } = p;
     let tab = document.getElementById(TAB_ID);
@@ -603,7 +623,7 @@
       overlay = document.createElement('div');
       overlay.id = OVERLAY_ID;
       overlay.dataset.esVersion = VERSION;
-      overlay.innerHTML = '<div id="earshot-head"></div><div id="earshot-call"></div><div class="es-tabs" id="earshot-tabs"></div><div id="earshot-body"></div>';
+      overlay.innerHTML = '<div id="earshot-pair"></div><div id="earshot-head"></div><div id="earshot-call"></div><div class="es-tabs" id="earshot-tabs"></div><div id="earshot-body"></div>';
       overlay.addEventListener('click', onMenuEvent);
       overlay.addEventListener('keydown', onKey);
       overlay.addEventListener('input', onInput);
@@ -617,6 +637,7 @@
     overlay.style.height = Math.max(0, root.clientHeight - stripWrap.offsetHeight) + 'px';
     if (wantOpenUntil > Date.now()) { wantOpenUntil = 0; setMenuOpen(true); }
     applyTabState(p);
+    maybeOpenForPair();
     updateTabBadge();
   }
   function applyTabState(p, clicked) {
@@ -642,11 +663,14 @@
     if (menuOpen === open) { applyTabState(); return; }
     menuOpen = open;
     if (!open) fresh.clear();
+    if (open) pendingPairOpen = false;
     applyTabState(null, clicked);
     if (open) {
       act({ type: 'hello' });
       const ov = document.getElementById(OVERLAY_ID); if (ov) ov.scrollTop = 0;
+      lastPairPhase = null;
       render(true);
+      if (ov) ov.scrollTop = 0;   // whatever the render changed, the top is what a person should see first
     }
   }
 
@@ -728,14 +752,23 @@
     if (interacting && !force) { renderQueued = true; return; }
     if (S && !S.pair && !(S.setup && ui.tab !== 'settings') && ui.tab === 'alerts') markAlertsSeen(); else fresh.clear();
     updateTabBadge();
-    setHtml('earshot-head', headHtml());
-    setHtml('earshot-call', callCardHtml());
     const body = document.getElementById('earshot-body');
-    if (S && S.pair) {  // a pairing is in progress (or finishing): it takes over the tab, wherever it was opened from
+    if (S && S.pair) {
+      // A pairing is in progress (or finishing): its panel is the first thing in the tab, above everything else,
+      // and nothing else is drawn but a ringing call, which stays answerable below it.
+      setHtml('earshot-head', '');
       setHtml('earshot-tabs', '');
-      setHtml('earshot-body', pairHtml(S.pair));
+      setHtml('earshot-body', '');
+      setHtml('earshot-pair', pairHtml(S.pair));
+      setHtml('earshot-call', callCardHtml());
+      if (lastPairPhase !== S.pair.phase) overlay.scrollTop = 0;   // a new step starts at its top
+      lastPairPhase = S.pair.phase;
       return;
     }
+    lastPairPhase = null;
+    setHtml('earshot-pair', '');
+    setHtml('earshot-head', headHtml());
+    setHtml('earshot-call', callCardHtml());
     setHtml('earshot-tabs', tabsHtml());
     if (!S) { setHtml('earshot-body', '<div class="es-msg">Waiting for the Earshot helper…</div>'); return; }
     if (S.setup && ui.tab !== 'settings') { setHtml('earshot-body', setupHtml(S.setup)); return; }

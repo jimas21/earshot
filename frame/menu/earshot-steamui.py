@@ -1579,7 +1579,8 @@ class Pairing:
         s.update(phase="confirm", code=digits or trim(msg.get("code"), 12), progress="")
         self.keep()
         self.timer("stall", self.STALL, lambda: self.fail("stalled"))
-        self.h.notify_direct("Earshot: check the pairing code in the Phone tab")
+        # The code itself goes in the pop-up: it is what the person has to compare with the iPhone.
+        self.h.notify_direct("iPhone pairing code %s - confirm it in the Phone tab" % s["code"])
 
     def confirm(self, op, accept):
         s = self.s

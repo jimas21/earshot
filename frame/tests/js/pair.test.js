@@ -33,7 +33,7 @@ function openPopup() {
     pair: (pair, patch) => w.__earshotMenu.setState(Object.assign({}, BASE, { pair }, patch)),
     click: (el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true })),
     act: (act, a) => doc.querySelector(`[data-act="${act}"]${a != null ? `[data-a="${a}"]` : ''}`),
-    text: () => doc.getElementById('earshot-body').textContent,
+    text: () => doc.getElementById('earshot-pair').textContent + doc.getElementById('earshot-body').textContent,
   };
 }
 
@@ -179,7 +179,7 @@ test('pairing: plain progress text, no buttons until the helper allows closing',
   assert.deepEqual(p.last(), { type: 'pair_close' });
 });
 
-test('confirm: the code is large, Confirm sends the same operation id, Cancel closes', () => {
+test('confirm: the code is large, Confirm sends the same operation id, Not this code declines', () => {
   const p = openPopup();
   p.pair({ phase: 'confirm', headset: 'Frame', name: 'Pat', code: '123456', op: 'earshot-listen-1-ab12' });
   const code = p.doc.querySelector('.es-code');
@@ -190,7 +190,7 @@ test('confirm: the code is large, Confirm sends the same operation id, Cancel cl
   assert.deepEqual(p.last(), { type: 'pair_confirm', op: 'earshot-listen-1-ab12', accept: true });
   p.click(p.act('pair-close'));
   assert.deepEqual(p.last(), { type: 'pair_close' });
-  assert.equal(p.act('pair-close').textContent, 'Cancel');
+  assert.equal(p.act('pair-close').textContent, 'Not this code');
 });
 
 test('failed: a plain fix and one main button, with the failure text escaped', () => {
@@ -268,4 +268,63 @@ test('the screen follows the helper: closing and reopening the tab shows the sam
   p.pair(null);
   assert.equal(p.doc.querySelector('.es-pair'), null);
   assert.ok(p.doc.getElementById('earshot-tabs').children.length > 0);
+});
+
+test('confirm: the pairing panel is the first thing in the tab, with the code and both buttons before any explanation', () => {
+  const p = openPopup();
+  p.state({ calls: Object.assign({}, BASE.calls, { incoming: { source: 'hfp', path: '/c1', name: 'Pat', ringing: true } }) });   // other sections have content
+  p.pair({ phase: 'confirm', headset: 'Frame', name: 'Pat', code: '123456', op: 'o1' },
+    { calls: Object.assign({}, BASE.calls, { incoming: { source: 'hfp', path: '/c1', name: 'Pat', ringing: true } }) });
+  const overlay = p.doc.getElementById('earshot-overlay');
+  const shown = [...overlay.children].filter((c) => c.textContent.trim() !== '');
+  assert.equal(shown[0].id, 'earshot-pair');                                      // above every other section, a ringing call included
+  assert.equal(overlay.children[0].id, 'earshot-pair');
+  assert.equal(p.doc.getElementById('earshot-head').textContent, '');             // no header, no tabs, no page above or beside it
+  assert.equal(p.doc.getElementById('earshot-tabs').textContent, '');
+  assert.equal(p.doc.getElementById('earshot-body').textContent, '');
+  assert.match(p.doc.getElementById('earshot-call').textContent, /Incoming call/);   // a ringing call is still answerable, below
+  const before = (a, b) => Boolean(a.compareDocumentPosition(b) & p.w.Node.DOCUMENT_POSITION_FOLLOWING);
+  const panel = p.doc.querySelector('.es-pair');
+  const code = panel.querySelector('.es-code'), go = p.act('pair-confirm'), no = p.act('pair-close'), why = panel.querySelector('.es-pstep');
+  assert.ok(panel.classList.contains('es-confirm'));
+  assert.ok(before(code, go) && before(go, why) && before(no, why));              // buttons right under the code, the explanation after them
+  assert.equal(go.textContent, 'Confirm');
+  assert.equal(no.textContent, 'Not this code');
+  assert.ok(before(panel, p.doc.getElementById('earshot-call')));
+});
+
+test('reopening the quick menu during a pairing lands on the pairing panel, scrolled to the top', () => {
+  const p = openPopup();
+  p.pair({ phase: 'confirm', headset: 'Frame', name: 'Pat', code: '123456', op: 'o1' });
+  const overlay = () => p.doc.getElementById('earshot-overlay');
+  const panelEl = p.doc.querySelector('[role="tabpanel"]');
+  const holder = panelEl.parentElement;
+  panelEl.remove();                                        // the quick menu closed
+  p.w.__earshotMenu.ensure();
+  assert.ok(!overlay().classList.contains('es-open'));
+  holder.appendChild(panelEl);                             // and opened again, showing Steam's own tab
+  let scrolled = [];
+  Object.defineProperty(overlay(), 'scrollTop', { get() { return 0; }, set(v) { scrolled.push(v); }, configurable: true });
+  p.w.__earshotMenu.ensure();
+  assert.ok(overlay().classList.contains('es-open'));      // it did not wait for a tap on the Phone tab
+  assert.match(p.doc.querySelector('.es-code').textContent, /123 456/);
+  assert.ok(scrolled.length > 0 && scrolled.every((v) => v === 0));
+  // a person who then goes to another of Steam's tabs is not pulled back
+  p.click(p.doc.getElementById('t1'));
+  p.pair({ phase: 'confirm', headset: 'Frame', name: 'Pat', code: '123456', op: 'o1' });
+  assert.ok(!overlay().classList.contains('es-open'));
+});
+
+test('a pairing that starts while the menu is closed opens the Phone tab when the quick menu next appears', () => {
+  const p = openPopup();
+  p.state({});
+  const panelEl = p.doc.querySelector('[role="tabpanel"]');
+  const holder = panelEl.parentElement;
+  panelEl.remove();
+  p.w.__earshotMenu.ensure();
+  p.pair({ phase: 'confirm', headset: 'Frame', name: 'Pat', code: '123456', op: 'o1' });   // arrives while the popup page is gone
+  holder.appendChild(panelEl);
+  p.w.__earshotMenu.ensure();
+  assert.ok(p.doc.getElementById('earshot-overlay').classList.contains('es-open'));
+  assert.match(p.doc.querySelector('.es-code').textContent, /123 456/);
 });

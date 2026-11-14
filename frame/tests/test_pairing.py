@@ -9,7 +9,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fakes import PairingFake, load_helper  # noqa: E402
+from fakes import FakeNotifier, PairingFake, load_helper  # noqa: E402
 from test_helper import BT_STATUS, Rig  # noqa: E402
 
 H = load_helper()
@@ -21,10 +21,10 @@ NO_PHONE = dict(BT_STATUS, device_address="", adapters=[{"path": "/org/bluez/hci
                             "powered": True, "adapter_id": "hci0"})
 
 
-def pair_rig(test, outcome="success", listen=True, supports=True, status=None, **kw):
+def pair_rig(test, outcome="success", listen=True, supports=True, status=None, rig_kw=None, **kw):
     """A rig with no phone paired and a fake daemon that plays `outcome`.
     supports: the daemon announces bt_pair_listen in protocol_info."""
-    rig = Rig(test)
+    rig = Rig(test, **(rig_kw or {}))
     rig.tether.answers["bt_status"] = [status or NO_PHONE]
     if supports:
         rig.tether.on_subscribe[0] = dict(rig.tether.on_subscribe[0],
@@ -128,7 +128,8 @@ class ListenRouteTests(unittest.TestCase):
         self.assertEqual(v["code"], "123456")
         self.assertEqual(v["op"], cmd["operation_id"])
         # it asked for attention in the headset and did not answer by itself
-        self.assertTrue(rig.pump(lambda: any("pairing code" in t for t in rig.vrcmd_texts()), 2))
+        self.assertTrue(rig.pump(lambda: rig.vrcmd_texts(), 2))
+        self.assertEqual(rig.vrcmd_texts(), ["iPhone pairing code 123456 - confirm it in the Phone tab"])
         rig.settle_for(0.2)
         self.assertEqual(fake.commands("confirm"), [])
         rig.action(type="pair_confirm", op="someone-elses", accept=True)
@@ -147,6 +148,17 @@ class ListenRouteTests(unittest.TestCase):
         self.assertTrue(v["ready"])
         rig.action(type="pair_done")
         self.assertTrue(rig.pump(lambda: pair_view(rig) is None, 2))
+
+    def test_the_pop_up_for_the_code_goes_through_the_earshot_notifier_and_carries_the_code(self):
+        rig, fake = pair_rig(self, rig_kw={"notifier": FakeNotifier()})
+        rig.action(type="pair_start")
+        wait_phase(self, rig, "listen")
+        self.assertTrue(rig.pump(lambda: fake.listening, 2))
+        fake.phone_taps()
+        v = wait_phase(self, rig, "confirm")
+        self.assertTrue(rig.pump(lambda: rig.popup_texts(), 2))
+        self.assertEqual(rig.popup_texts(), ["iPhone pairing code %s - confirm it in the Phone tab" % v["code"]])
+        self.assertEqual(rig.vrcmd_texts(), [])
 
     def test_progress_text_is_plain_words(self):
         rig, fake = pair_rig(self)
