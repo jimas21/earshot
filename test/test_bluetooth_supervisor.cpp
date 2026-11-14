@@ -1406,16 +1406,3 @@ TEST(HoldAncs, ClassicAloneDoesNotHoldWhenLeIsVisible) {
     EXPECT_TRUE(should_hold_ancs(false, bearer, ANCS_BEARER_GRACE_SECONDS - 1, 0)) << "inside the grace window";
     EXPECT_TRUE(should_hold_ancs(true, bearer, past_grace, 0)) << "a live session holds";
 }
-
-// Opening MAP and PBAP the moment the Classic link came up, while the iPhone still refused them, was
-// followed by the iPhone dropping the LE link that carries notifications (2026-11-13). They wait for
-// ANCS, but never longer than the grace, and never when notifications are off or already up.
-TEST(ObexDeferral, MessagesWaitForNotificationsButNotForever) {
-    EXPECT_TRUE(should_defer_obex(true, false, 100, 100)) << "opened MAP/PBAP before ANCS had a chance";
-    EXPECT_TRUE(should_defer_obex(true, false, 100 + OBEX_AFTER_LINK_GRACE_SECONDS - 1, 100));
-    EXPECT_FALSE(should_defer_obex(true, false, 100 + OBEX_AFTER_LINK_GRACE_SECONDS, 100))
-        << "a phone that never shares notifications must still get its texts";
-    EXPECT_FALSE(should_defer_obex(true, true, 100, 100)) << "ANCS is up: nothing to wait for";
-    EXPECT_FALSE(should_defer_obex(false, false, 100, 100)) << "notifications are off: nothing to wait for";
-    EXPECT_FALSE(should_defer_obex(true, false, 100, -1)) << "no Classic link: nothing to open anyway";
-}

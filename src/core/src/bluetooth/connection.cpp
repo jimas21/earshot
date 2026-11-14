@@ -751,7 +751,6 @@ namespace tether::bluetooth {
         bool ancs_preference = true;
         bool ancs_enabled = true;
         bool link_was_ready = false;
-        int64_t link_ready_since = -1;
         bool device_was_present = false;
         // Whether losing the phone to a supervision timeout locks the session
         std::atomic<bool> lock_on_away{false};
@@ -1468,21 +1467,11 @@ namespace tether::bluetooth {
                 bearers->reset();
                 map_failures = 0;
             }
-            if (link_ready && !link_was_ready)
-                link_ready_since = now;
-            else if (!link_ready)
-                link_ready_since = -1;
             link_was_ready = link_ready;
 
             const bool inactive = yield_when_inactive.load() && session_inactive();
             profiles->set_held(hold_map.load() || inactive, hold_pbap.load() || inactive, inactive);
-            bool ancs_up;
-            {
-                std::lock_guard<std::mutex> lock(status_mutex);
-                ancs_up = ancs_ready;
-            }
-            if (!should_defer_obex(ancs_enabled, ancs_up, now, link_ready_since))
-                profiles->tick(now, bearers->status().device_paired);
+            profiles->tick(now, bearers->status().device_paired);
 
             const auto& bearer = bearers->status();
 
