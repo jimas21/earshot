@@ -145,6 +145,13 @@ namespace tether::bluetooth {
         }
         std::lock_guard<std::mutex> lock(g_mutex);
 
+        // With calls off there is nothing for a Hands-Free record to do but invite the phone to route its audio here.
+        if (const char* calls = std::getenv("TETHER_CALLS"); calls && std::string(calls) == "0") {
+            release_locked(monitor);
+            how = "calls are off";
+            return false;
+        }
+
         HandsfreeSources sources;
         sources.ours_registered = g_registered;
         sources.adapter_lists_hfp = adapter_offers_handsfree(monitor);
