@@ -1801,12 +1801,6 @@ class Pairing:
 
     # ----- what the page draws -----
 
-    def map_on_offer(self):
-        """Message Access can work here: it is open, or the iPhone refused it (so the switch exists on the phone).
-        Missing obexd, a headset the iPhone does not treat as a car kit, or no answer at all mean it cannot."""
-        c = self.h.conn
-        return bool(c.get("map_open")) or c.get("map_error") in ("forbidden", "busy")
-
     def checklist(self):
         c, weak = self.h.conn, bool(self.s.get("weak"))
 
@@ -1826,25 +1820,16 @@ class Pairing:
             n_state, n_note = "off", "This pairing cannot carry notifications."
         notifications = {"id": "notifications", "label": "Share System Notifications", "state": n_state,
                          "note": n_note, "essential": not weak}
-        # The iPhone only shows its Messages, Contacts, Favorites and Recents switches to a device it treats as a
-        # car kit. When Message Access is not on offer at all, listing those switches sends people looking for
-        # settings that are not there: say plainly that replies are not available instead.
-        if not self.map_on_offer():
-            return [notifications,
-                    {"id": "messages", "label": "Replying to texts", "state": "off",
-                     "note": "Not available on this headset yet. Texts still show up as notifications.",
-                     "essential": False}]
-        m_state, m_note = perm(c.get("map_open"), c.get("map_error"), "Needs Show Notifications and Sync Contacts.")
+        # Message Access (texts, replies) and Contacts are the iPhone's Show Notifications and Sync Contacts switches.
+        # Without Message Access the headset can neither read nor answer texts.
+        m_state, m_note = perm(c.get("map_open"), c.get("map_error"),
+                               "Texts cannot be read or answered until the iPhone allows message access.")
         p_state, p_note = perm(c.get("pbap_open"), c.get("pbap_error"))
-        recents = bool(self.h.call_history)
         return [
             notifications,
-            {"id": "messages", "label": "Text messages", "state": m_state, "note": m_note, "essential": True},
+            {"id": "messages", "label": "Show Notifications", "state": m_state, "note": m_note,
+             "essential": c.get("map_error") not in ("no_daemon", "no_record")},
             {"id": "contacts", "label": "Sync Contacts", "state": p_state, "note": p_note, "essential": False},
-            {"id": "favorites", "label": "Phone Favorites", "state": "unknown",
-             "note": "Turn it on. Earshot cannot check this one.", "essential": False},
-            {"id": "recents", "label": "Phone Recents", "state": "on" if recents else "unknown",
-             "note": "Working." if recents else "Turn it on. Earshot cannot check this one.", "essential": False},
         ]
 
     def view(self):

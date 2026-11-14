@@ -219,15 +219,13 @@ test('weak bond: explains, offers Try again or keeping it', () => {
 test('almost done: a checklist that ticks itself, Done only when the essentials are on', () => {
   const p = openPopup();
   const items = (n, m) => [
-    { id: 'notifications', label: 'Show Notifications', state: n, note: n === 'on' ? 'Working.' : 'It can take a minute to appear.', essential: true },
-    { id: 'messages', label: 'Text messages', state: m, note: m === 'off' ? 'Still off on the iPhone.' : 'Working.', essential: true },
-    { id: 'contacts', label: 'Sync Contacts', state: 'waiting', note: 'Waiting for the iPhone…', essential: false },
-    { id: 'favorites', label: 'Phone Favorites', state: 'unknown', note: 'Turn it on. Earshot cannot check this one.', essential: false },
-    { id: 'recents', label: 'Phone Recents', state: 'unknown', note: 'Turn it on. Earshot cannot check this one.', essential: false }];
+    { id: 'notifications', label: 'Share System Notifications', state: n, note: n === 'on' ? 'Working.' : 'It can take a minute to appear.', essential: true },
+    { id: 'messages', label: 'Show Notifications', state: m, note: m === 'off' ? 'Still off on the iPhone.' : 'Working.', essential: true },
+    { id: 'contacts', label: 'Sync Contacts', state: 'waiting', note: 'Waiting for the iPhone…', essential: false }];
   p.pair({ phase: 'almost', headset: 'Frame', connected: true, weak: false, ready: false, items: items('waiting', 'off') });
   assert.match(p.text(), /Almost done/);
   assert.match(p.text(), /Settings > Bluetooth/);
-  assert.equal(p.doc.querySelectorAll('.es-chk').length, 5);
+  assert.equal(p.doc.querySelectorAll('.es-chk').length, 3);
   assert.equal(p.doc.querySelectorAll('.es-chk.es-on').length, 0);
   assert.equal(p.doc.querySelectorAll('.es-chk.es-off').length, 1);
   assert.equal(p.act('pair-done').textContent, 'I will finish later');

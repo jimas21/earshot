@@ -341,7 +341,7 @@
   function threadList() {
     const list = S.threads || [];
     if (!list.length) {
-      return `<div class="es-msg">${S.phone && S.phone.messages ? 'No conversations yet.' : 'Replying to texts is not available on this headset yet. New texts show up as notifications.'}</div>`;
+      return `<div class="es-msg">${S.phone && S.phone.messages ? 'No conversations yet.' : 'Texts cannot be read or answered until the iPhone allows message access.'}</div>`;
     }
     return list.map((t) => `<div class="es-item es-click" data-act="open-thread" data-a="${esc(t.thread)}"><div class="es-main"><div class="es-top">` +
       `<span class="es-app">${esc(t.name || 'Unknown')}</span><span class="es-time">${esc(whenText(t.timestamp))}</span></div>` +

@@ -144,7 +144,7 @@ class ListenRouteTests(unittest.TestCase):
         self.assertEqual(states["notifications"], "on")        # CONNECTED reports ancs_ready and map_open
         self.assertEqual(states["messages"], "on")
         self.assertEqual(states["contacts"], "waiting")
-        self.assertEqual(states["favorites"], "unknown")
+        self.assertEqual(list(states), ["notifications", "messages", "contacts"])
         self.assertTrue(v["ready"])
         rig.action(type="pair_done")
         self.assertTrue(rig.pump(lambda: pair_view(rig) is None, 2))
@@ -295,9 +295,9 @@ class ResultTests(unittest.TestCase):
         h.dirty()
         self.assertTrue(rig.pump(lambda: pair_view(rig)["ready"], 2))
 
-    def test_checklist_without_message_access_lists_only_switches_that_exist(self):
-        # No obexd, or an iPhone that never offers Message Access: its Messages/Contacts/Favorites/Recents
-        # switches are not on the phone, so the list must not send anyone looking for them.
+    def test_checklist_without_message_access_says_so_neutrally(self):
+        # Message Access not up (no obexd, or the iPhone has not allowed it): texts cannot be read or answered,
+        # and the list says that without claiming the headset cannot do it.
         rig, fake = self.finish("success")
         self.accept(rig)
         wait_phase(self, rig, "almost")
@@ -305,11 +305,13 @@ class ResultTests(unittest.TestCase):
         h.conn = dict(h.conn, ancs_ready=True, map_open=False, map_error="no_daemon", pbap_open=False,
                       pbap_error="no_daemon")
         h.dirty()
-        self.assertTrue(rig.pump(lambda: [i["id"] for i in pair_view(rig)["items"]] == ["notifications", "messages"], 2))
+        self.assertTrue(rig.pump(lambda: not pair_view(rig)["items"][1]["essential"], 2))
         items = {i["id"]: i for i in pair_view(rig)["items"]}
         self.assertEqual(items["notifications"]["label"], "Share System Notifications")
-        self.assertFalse(items["messages"]["essential"])
-        self.assertNotIn("Sync Contacts", items["messages"]["note"])
+        self.assertEqual(items["messages"]["label"], "Show Notifications")
+        self.assertEqual(items["contacts"]["label"], "Sync Contacts")
+        self.assertIn("until the iPhone allows message access", items["messages"]["note"])
+        self.assertNotIn("not available", items["messages"]["note"].lower())
         self.assertTrue(pair_view(rig)["ready"])
 
     def test_stale_bond_clears_our_side_and_says_what_to_do_on_the_iphone(self):
