@@ -532,7 +532,7 @@
     h += '<div class="es-h">Updates</div>' + toggle('Update automatically', st.auto_update !== false, 'auto_update', 'Checks for a new Earshot every few hours and installs it.') +
       `<div class="es-row es-col"><div class="es-choice"><button data-act="check-updates"${u.busy ? ' disabled' : ''}>${u.busy ? esc(u.text) : 'Check for updates'}</button></div>` +
       (u.text && !u.busy ? `<div class="es-result">${esc(u.text)}${u.when ? ` <span class="es-note">${esc(whenText(u.when))}</span>` : ''}</div>` : '') + '</div>' +
-      (Object.keys(versions).length ? `<div class="es-note" style="margin-top:8px">Installed: ${Object.keys(versions).map((k) => esc(k) + ' ' + esc(versions[k])).join(', ')}</div>` : '');
+      (S.update && S.update.about ? `<div class="es-note" style="margin-top:8px">${esc(S.update.about)}</div>` : Object.keys(versions).length ? `<div class="es-note" style="margin-top:8px">Installed: ${Object.keys(versions).map((k) => esc(k) + ' ' + esc(versions[k])).join(', ')}</div>` : '');
     return h + '</div>';
   }
 

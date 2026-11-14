@@ -83,6 +83,7 @@ MAP_APP_ID = "com.apple.MobileSMS"  # Tether leaves ANCS "Messages" alone: MAP c
 
 UPDATER = os.path.join(INSTALL_ROOT, "earshot-frame-install.py")
 VERSIONS_FILE = os.path.join(INSTALL_ROOT, "versions.json")
+PACKAGE_DIR = os.path.join(INSTALL_ROOT, "frame")   # the installed frame package: VERSION and TETHER_VERSION
 UPDATE_STATUS_FILE = os.path.join(STATE_DIR, "update.json")
 UPDATE_UNIT = "earshot-update"
 AUTO_UPDATE_FIRST = 10 * 60
@@ -1872,7 +1873,7 @@ class Pairing:
 class Helper:
     def __init__(self, loop=None, settings=None, connect_tether=connect_unix, executor=None,
                  menu_file=MENU_FILE, cdp_base=CDP_BASE, http_get=http_get_json, ws_factory=WsClient,
-                 vrcmd=VRCMD, notifier=None, updater=UPDATER, status_file=UPDATE_STATUS_FILE, versions_file=VERSIONS_FILE,
+                 vrcmd=VRCMD, notifier=None, updater=UPDATER, status_file=UPDATE_STATUS_FILE, versions_file=VERSIONS_FILE, package_dir=PACKAGE_DIR,
                  settings_path=None, apps_path=None, scan=scan_processes, burst_window=8.0, push_delay=0.15,
                  tether_backoff=(1.0, 30.0), presence_every=10.0, send_timeout=45.0,
                  settle_seconds=5.0, auto_update_first=AUTO_UPDATE_FIRST, clock=None, exists=os.path.exists):
@@ -1886,6 +1887,7 @@ class Helper:
         self.updater = updater
         self.status_file = status_file
         self.versions_file = versions_file
+        self.package_dir = package_dir
         self.push_delay = push_delay
         self.presence_every = presence_every
         self.send_timeout = send_timeout
@@ -2637,6 +2639,29 @@ class Helper:
             return {}
         return {str(k)[:30]: str(v)[:30] for k, v in data.items()} if isinstance(data, dict) else {}
 
+    @staticmethod
+    def clean_version(text):
+        """A release tag or version file as a plain version: earshot-v0.1.0 and v0.3.5 -> 0.1.0 and 0.3.5."""
+        text = str(text).strip()[:30]
+        for prefix in ("earshot-v", "earshot-", "v", "V"):
+            if text.startswith(prefix) and text[len(prefix):len(prefix) + 1].isdigit():
+                return text[len(prefix):]
+        return text
+
+    def read_package_file(self, name):
+        try:
+            with open(os.path.join(self.package_dir, name), "r", encoding="utf-8") as f:
+                return self.clean_version(f.read(64))
+        except (OSError, ValueError):
+            return ""
+
+    def about_version(self):
+        """"Earshot 0.1.0 · Tether 0.3.5". The Tether half is left out when the package has no TETHER_VERSION."""
+        earshot = self.read_package_file("VERSION") or self.clean_version(self.installed_versions().get("frame", ""))
+        tether = self.read_package_file("TETHER_VERSION")
+        parts = (["Earshot " + earshot] if earshot else []) + (["Tether " + tether] if tether else [])
+        return " · ".join(parts)
+
     def tick_update(self):
         self.update_timer = None
         if self.stopping:
@@ -2806,7 +2831,7 @@ class Helper:
             "quick_replies": [trim(r, 120) for r in self.settings.get("quick_replies")],
             "apps": self.apps_view(),
             "settings": {k: self.settings.get(k) for k in ("priority", "alerts", "preview", "auto_update")},
-            "update": {"status": status, "versions": self.installed_versions()},
+            "update": {"status": status, "versions": self.installed_versions(), "about": self.about_version()},
             "unread": sum(int(t["unread"] or 0) for t in threads),
         }
 
