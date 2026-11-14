@@ -217,7 +217,15 @@ jobs:
           echo "${BLUEZ_SHA256}  bluez.tar.xz" | sha256sum -c -
           tar -xf bluez.tar.xz
           cd "bluez-${BLUEZ_VERSION}"
-          ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var             --enable-obex --disable-manpages --disable-tools --disable-monitor --disable-client             --disable-systemd --disable-udev --disable-cups --disable-mesh --disable-midi --disable-hid             --disable-hog --disable-health --disable-sap --disable-a2dp --disable-avrcp --disable-network             --disable-test --disable-deprecated --disable-library --disable-testing             --disable-btpclient --disable-nfc --disable-sixaxis --disable-datafiles --disable-pie
+          ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var \
+            --enable-obex --disable-manpages --disable-tools --disable-monitor --disable-client \
+            --disable-systemd --disable-udev --disable-cups --disable-mesh --disable-midi --disable-hid \
+            --disable-hog --disable-health --disable-sap --disable-a2dp --disable-avrcp --disable-network \
+            --disable-test --disable-deprecated --disable-testing \
+            --disable-btpclient --disable-nfc --disable-sixaxis --disable-datafiles
+          # the generated headers first (lib/bluetooth/*.h links, builtin.h), then only the obexd binary
+          printf 'bs:\n\t@echo $(BUILT_SOURCES)\n' > "${RUNNER_TEMP}/bs.mk"
+          make -j"$(nproc)" $(make -s -f Makefile -f "${RUNNER_TEMP}/bs.mk" bs)
           make -j"$(nproc)" obexd/src/obexd
           file obexd/src/obexd
           mkdir -p "${GITHUB_WORKSPACE}/obexd-build"
