@@ -446,6 +446,16 @@ namespace tether::bluetooth::ancs {
 
     void AncsClientState::handle_source_event(const SourceEvent& event, int64_t now) {
         (void)now;
+        // No content here, only that the phone announced something: the first thing to check when a
+        // notification never shows up is whether it ever reached this computer.
+        if (!event.pre_existing())
+            debug::log(INFO,
+                       "ancs: notification {} {} (category {})",
+                       event.uid,
+                       event.event == EventId::Added      ? "added"
+                       : event.event == EventId::Modified ? "modified"
+                                                          : "removed",
+                       static_cast<int>(event.category));
         Decision decision;
         {
             std::lock_guard<std::mutex> lock(registry_mutex);
@@ -552,6 +562,8 @@ namespace tether::bluetooth::ancs {
             std::lock_guard<std::mutex> lock(registry_mutex);
             registry.store(notification);
         }
+        if (!notification.pre_existing)
+            debug::log(INFO, "ancs: notification {} fetched from {}", notification.uid, notification.app_id);
         if (on_notification)
             on_notification(notification);
     }
@@ -574,7 +586,7 @@ namespace tether::bluetooth::ancs {
             },
             [raw](const Request& request, const std::string& reason) {
                 raw->in_progress.erase(request.uid);
-                debug::log(WARN, "ancs: request failed: {}", reason);
+                debug::log(WARN, "ancs: request for notification {} failed: {}", request.uid, reason);
             });
     }
 
