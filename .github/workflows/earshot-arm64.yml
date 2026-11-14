@@ -72,7 +72,7 @@ jobs:
           fi
           echo "ver=${ver}" >> "${GITHUB_OUTPUT}"
           # the Tether version this fork is based on, shown beside Earshot's own
-          tether="$(sed -n 's/^project(tether VERSION \([0-9.]*\).*//p' CMakeLists.txt)"
+          tether="$(sed -n 's/^project(tether VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
           test -n "${tether}"
           echo "tether=${tether}" >> "${GITHUB_OUTPUT}"
 
