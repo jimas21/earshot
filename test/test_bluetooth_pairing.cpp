@@ -274,6 +274,21 @@ TEST(ListenAdvert, GoesDownOnceAPhoneIsPairing) {
     EXPECT_EQ(listen_advert_action(true, true), ListenAdvert::Stop);
 }
 
+// One advert object at a time: a listen keeps the supervision's own solicitation instead of registering a second
+// one, which a single-instance controller refuses ("Failed to register advertisement").
+TEST(ListenAdvert, KeepsTheSolicitationAlreadyOnAirInsteadOfRegisteringASecond) {
+    EXPECT_EQ(advert_start_action(true, true), AdvertStart::Reuse);
+}
+
+TEST(ListenAdvert, RegistersWhenNothingIsOnAirOrItIsOnAnotherAdapter) {
+    EXPECT_EQ(advert_start_action(true, false), AdvertStart::Replace);
+}
+
+TEST(ListenAdvert, AManualSolicitReplacesWhatIsThere) {
+    EXPECT_EQ(advert_start_action(false, true), AdvertStart::Replace);
+    EXPECT_EQ(advert_start_action(false, false), AdvertStart::Replace);
+}
+
 TEST(ListenAdvert, StaysDownWhileAPhoneIsPairing) {
     EXPECT_EQ(listen_advert_action(true, false), ListenAdvert::Hold);
 }

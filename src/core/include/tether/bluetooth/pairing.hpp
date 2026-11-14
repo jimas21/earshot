@@ -85,6 +85,16 @@ namespace tether::bluetooth {
     };
     ListenAdvert listen_advert_action(bool phone_announced, bool advert_on_air);
 
+    // What to do about the ANCS solicitation advert when something asks for it. The controller may offer a single
+    // advertising instance, so a second registration while the supervision's own is up fails with "Failed to register
+    // advertisement": the same advert is kept instead of being torn down and re-registered, which BlueZ may not have
+    // released yet. A caller that needs a fresh one (the manual solicit, a re-arm after BlueZ dropped it) replaces it.
+    enum class AdvertStart {
+        Reuse,   // the advert on air is the one wanted: leave it
+        Replace, // take down whatever is there and register again
+    };
+    AdvertStart advert_start_action(bool reuse_if_on_air, bool on_air_on_this_adapter);
+
     // Whether a listen should take this device's bond as the new one it is waiting for. `target_unpaired_seen`
     // says the target was observed unpaired at some point: a bond that was already there is not news. A
     // bond on any device other than the one the agent is serving never counts.

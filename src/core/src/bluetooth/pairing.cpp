@@ -38,6 +38,8 @@ namespace tether::bluetooth {
 
         // how long to stand back after bluez refuses to put the solicitation on air
         constexpr int SOLICIT_RETRY_SECONDS = 30;
+        // How long to let BlueZ release an advertising instance before registering the replacement.
+        constexpr int ADVERT_REPLACE_RETRY_MS = 400;
 
         std::string normalize_address(std::string address) {
             for (char& c : address)
@@ -340,6 +342,8 @@ namespace tether::bluetooth {
 
         std::mutex g_advert_mutex;
         AncsAdvertisement* g_advert = nullptr;
+        // The adapter the advert above was registered on.
+        std::string g_advert_adapter;
 
         std::atomic<bool> g_pairing_owns_advert{false};
 
@@ -382,28 +386,45 @@ namespace tether::bluetooth {
             stop_advert_locked(monitor);
         }
 
-        // Puts the solicitation advert on air, replacing whatever was there.
-        bool start_advert(BluezMonitor& monitor, const std::string& adapter_path, std::string& err) {
+        // Puts the solicitation advert on air, replacing whatever was there, or, with `reuse_if_on_air`, keeping the
+        // one that already is. There is only ever one advert object.
+        bool start_advert(BluezMonitor& monitor,
+                          const std::string& adapter_path,
+                          std::string& err,
+                          bool reuse_if_on_air = false) {
             if (adapter_path.empty()) {
                 err = _("No Bluetooth adapter is available.");
                 return false;
             }
             std::lock_guard<std::mutex> lock(g_advert_mutex);
-            stop_advert_locked(monitor);
-            auto* advert = new AncsAdvertisement(monitor.connection(), adapter_path);
-
-            bool exported = false;
-            monitor.invoke_sync([&] { exported = advert->export_object(); });
-            // BlueZ reads the advertisement's properties back before returning, so
-            // this call must stay off the thread that answers those reads.
-            std::string registration_error;
-            if (exported && advert->register_with_bluez(&registration_error)) {
-                g_advert = advert;
+            const bool on_air_here = g_advert && g_advert->active() && g_advert_adapter == adapter_path;
+            if (advert_start_action(reuse_if_on_air, on_air_here) == AdvertStart::Reuse)
                 return true;
-            }
+            const bool replacing = g_advert != nullptr;
+            stop_advert_locked(monitor);
 
-            monitor.invoke_sync([&] { advert->unexport_object(); });
-            delete advert;
+            // BlueZ frees the instance of an advert it was just told to drop a moment after the call returns, and a
+            // controller with one instance refuses the next registration until then.
+            std::string registration_error;
+            for (int attempt = 0; attempt < (replacing ? 2 : 1); ++attempt) {
+                if (attempt > 0)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(ADVERT_REPLACE_RETRY_MS));
+                auto* advert = new AncsAdvertisement(monitor.connection(), adapter_path);
+
+                bool exported = false;
+                monitor.invoke_sync([&] { exported = advert->export_object(); });
+                // BlueZ reads the advertisement's properties back before returning, so
+                // this call must stay off the thread that answers those reads.
+                registration_error.clear();
+                if (exported && advert->register_with_bluez(&registration_error)) {
+                    g_advert = advert;
+                    g_advert_adapter = adapter_path;
+                    return true;
+                }
+
+                monitor.invoke_sync([&] { advert->unexport_object(); });
+                delete advert;
+            }
             err = registration_error.empty() ? _("Could not prepare the ANCS advertisement.")
                                              : tr_format(_("Could not advertise for ANCS: {}"), registration_error);
             return false;
@@ -962,6 +983,10 @@ namespace tether::bluetooth {
         }
     } // namespace
 
+    AdvertStart advert_start_action(bool reuse_if_on_air, bool on_air_on_this_adapter) {
+        return reuse_if_on_air && on_air_on_this_adapter ? AdvertStart::Reuse : AdvertStart::Replace;
+    }
+
     ListenAdvert listen_advert_action(bool phone_announced, bool advert_on_air) {
         if (phone_announced)
             return advert_on_air ? ListenAdvert::Stop : ListenAdvert::Hold;
@@ -1062,7 +1087,8 @@ namespace tether::bluetooth {
         }
 
         std::string advert_err;
-        const bool on_air = start_advert(monitor, adapter, advert_err);
+        // The supervision's own solicitation may already be on air; it says the same thing, so keep it.
+        const bool on_air = start_advert(monitor, adapter, advert_err, true);
         notify(progress, "listening", on_air ? "" : advert_err);
 
         const int64_t deadline = now_seconds() + std::max(1, seconds);
