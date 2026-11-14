@@ -783,6 +783,9 @@ namespace tether::bluetooth {
         // inbox, which on a first run is every message it holds.
         bool map_session_backfill = true;
         std::string pulled_pbap_path;
+        // When the last pull on this session failed: try again then. The first pull usually lands in the seconds
+        // before the user turns on Sync Contacts on the iPhone, comes back empty, and used to be the only one.
+        int64_t pbap_retry_at = 0;
 
         // The phone's recent calls (PBAP cch), newest first. Memory only.
         std::vector<VCard> call_history;
@@ -830,7 +833,7 @@ namespace tether::bluetooth {
         void supervise_away_lock(int64_t now, bool obex_up);
 
         void sync_messages(int64_t now);
-        void sync_contacts();
+        void sync_contacts(int64_t now);
         void sync_call_history();
         nlohmann::json call_history_json() const;
         void sync_ancs(int64_t now);
@@ -1145,26 +1148,30 @@ namespace tether::bluetooth {
 
     // Pulls the phonebook once per PBAP session. Contacts change far more slowly
     // than messages, and a full pull is an expensive transfer to repeat.
-    void ConnectionState::sync_contacts() {
+    void ConnectionState::sync_contacts(int64_t now) {
         if (!profiles->status().pbap_open) {
             pulled_pbap_path.clear();
+            pbap_retry_at = 0;
             return;
         }
-        if (pulled_pbap_path == profiles->pbap_session())
+        if (pulled_pbap_path == profiles->pbap_session() && (pbap_retry_at == 0 || now < pbap_retry_at))
             return;
         pulled_pbap_path = profiles->pbap_session();
+        pbap_retry_at = 0;
         call_history_stale = true;
 
         PbapSession session(profile_ops->bus(), pulled_pbap_path);
         std::string err;
         if (!session.select_phonebook(err)) {
             debug::log(WARN, "bluetooth: PBAP Select failed: {}", err);
+            pbap_retry_at = now + PBAP_RETRY_SECONDS;
             return;
         }
 
         auto contacts = session.pull_all(err, PBAP_MAX_CONTACTS, PBAP_CONTACT_FIELDS, 1);
         if (!err.empty()) {
-            debug::log(WARN, "bluetooth: PBAP PullAll failed: {}", err);
+            debug::log(WARN, "bluetooth: PBAP PullAll failed: {} (trying again in {} s)", err, PBAP_RETRY_SECONDS);
+            pbap_retry_at = now + PBAP_RETRY_SECONDS;
             return;
         }
 
@@ -1476,7 +1483,7 @@ namespace tether::bluetooth {
             refresh_status();
             publish();
 
-            sync_contacts();
+            sync_contacts(now);
             sync_call_history();
             sync_messages(now);
             sync_ancs(now);
