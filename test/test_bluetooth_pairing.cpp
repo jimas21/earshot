@@ -6,6 +6,7 @@
 #include <tether/bluetooth/config.hpp>
 #include <tether/bluetooth/hfp_profile.hpp>
 #include <tether/bluetooth/pairing.hpp>
+#include <tether/bluetooth/pbap_session.hpp>
 
 using namespace tether::bluetooth;
 
@@ -346,4 +347,14 @@ TEST(HandsfreeStub, WithdrawsWhenPipeWireTelephonyAppearsLater) {
 TEST(HandsfreeStub, KeepsItsOwnRecordWhileNobodyElseWantsTheRole) {
     EXPECT_EQ(decide_handsfree_stub({true, true, false}), HandsfreeStub::Keep);
     EXPECT_EQ(decide_handsfree_stub({true, false, false}), HandsfreeStub::Keep);
+}
+
+// A phonebook pull that fails (Sync Contacts still off) is retried, but less and less often, never every few seconds.
+TEST(PbapRetry, BacksOffFromThirtySecondsToTenMinutes) {
+    EXPECT_EQ(pbap_retry_delay(1), 30);
+    EXPECT_EQ(pbap_retry_delay(2), 60);
+    EXPECT_EQ(pbap_retry_delay(3), 120);
+    EXPECT_EQ(pbap_retry_delay(5), 480);
+    EXPECT_EQ(pbap_retry_delay(6), 600);
+    EXPECT_EQ(pbap_retry_delay(50), 600);
 }

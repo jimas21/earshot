@@ -786,6 +786,7 @@ namespace tether::bluetooth {
         // When the last pull on this session failed: try again then. The first pull usually lands in the seconds
         // before the user turns on Sync Contacts on the iPhone, comes back empty, and used to be the only one.
         int64_t pbap_retry_at = 0;
+        int pbap_failures = 0; // consecutive failed pulls on this session: the retry interval doubles with each
 
         // The phone's recent calls (PBAP cch), newest first. Memory only.
         std::vector<VCard> call_history;
@@ -1152,10 +1153,13 @@ namespace tether::bluetooth {
         if (!profiles->status().pbap_open) {
             pulled_pbap_path.clear();
             pbap_retry_at = 0;
+            pbap_failures = 0;
             return;
         }
         if (pulled_pbap_path == profiles->pbap_session() && (pbap_retry_at == 0 || now < pbap_retry_at))
             return;
+        if (pulled_pbap_path != profiles->pbap_session())
+            pbap_failures = 0;
         pulled_pbap_path = profiles->pbap_session();
         pbap_retry_at = 0;
         call_history_stale = true;
@@ -1163,15 +1167,15 @@ namespace tether::bluetooth {
         PbapSession session(profile_ops->bus(), pulled_pbap_path);
         std::string err;
         if (!session.select_phonebook(err)) {
-            debug::log(WARN, "bluetooth: PBAP Select failed: {}", err);
-            pbap_retry_at = now + PBAP_RETRY_SECONDS;
+            pbap_retry_at = now + pbap_retry_delay(++pbap_failures);
+            debug::log(WARN, "bluetooth: PBAP Select failed: {} (trying again in {} s)", err, pbap_retry_at - now);
             return;
         }
 
         auto contacts = session.pull_all(err, PBAP_MAX_CONTACTS, PBAP_CONTACT_FIELDS, 1);
         if (!err.empty()) {
-            debug::log(WARN, "bluetooth: PBAP PullAll failed: {} (trying again in {} s)", err, PBAP_RETRY_SECONDS);
-            pbap_retry_at = now + PBAP_RETRY_SECONDS;
+            pbap_retry_at = now + pbap_retry_delay(++pbap_failures);
+            debug::log(WARN, "bluetooth: PBAP PullAll failed: {} (trying again in {} s)", err, pbap_retry_at - now);
             return;
         }
 

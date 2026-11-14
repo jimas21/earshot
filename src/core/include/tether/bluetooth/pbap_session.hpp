@@ -14,8 +14,16 @@ namespace tether::bluetooth {
     inline constexpr int PBAP_TRANSFER_TIMEOUT_SECONDS = 60;
     inline constexpr int PBAP_FILE_GRACE_SECONDS = 3;
     inline constexpr int PBAP_MAX_CONTACTS = 5000;
-    // A failed phonebook pull (typically: Sync Contacts not switched on yet) is retried this often.
-    inline constexpr int PBAP_RETRY_SECONDS = 30;
+    // A failed phonebook pull (typically: Sync Contacts not switched on yet) is retried after 30 s, then twice as
+    // long after each further failure, never less often than every 10 minutes. A good pull ends the retries.
+    inline constexpr int PBAP_RETRY_FIRST_SECONDS = 30;
+    inline constexpr int PBAP_RETRY_MAX_SECONDS = 600;
+    inline constexpr int pbap_retry_delay(int failures) {
+        int delay = PBAP_RETRY_FIRST_SECONDS;
+        for (int i = 1; i < failures && delay < PBAP_RETRY_MAX_SECONDS; ++i)
+            delay *= 2;
+        return delay < PBAP_RETRY_MAX_SECONDS ? delay : PBAP_RETRY_MAX_SECONDS;
+    }
     inline constexpr int PBAP_MAX_CALLS = 100;
 
     inline constexpr const char* PBAP_CONTACT_FIELDS = "['N','FN','TEL','EMAIL']";
