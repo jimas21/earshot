@@ -33,9 +33,12 @@ namespace tether::bluetooth::ancs {
     }
 
     void ControlPointSequencer::start_next(int64_t now) {
+        // After a refused or stuck write, wait before writing again: BlueZ may still be busy with the last one
+        // and answers every write meanwhile with InProgress, which used to fail the whole queue in one burst.
+        if (now < retry_after_)
+            return;
         while (!in_flight_ && !queue_.empty()) {
-            current_ = std::move(queue_.front());
-            queue_.pop_front();
+            current_ = queue_.front();
 
             const bool expects_response = !current_.attribute_ids.empty();
             if (expects_response) {
@@ -47,10 +50,18 @@ namespace tether::bluetooth::ancs {
             if (!write_ || !write_(current_.payload)) {
                 in_flight_ = false;
                 assembler_.reset();
-                if (on_fail_)
-                    on_fail_(current_, "Could not write to the ANCS control point.");
-                continue;
+                retry_after_ = now + WRITE_RETRY_SECONDS;
+                // The same request is retried; only after WRITE_ATTEMPTS refusals is it given up.
+                if (++attempts_ >= WRITE_ATTEMPTS) {
+                    queue_.pop_front();
+                    attempts_ = 0;
+                    if (on_fail_)
+                        on_fail_(current_, "Could not write to the ANCS control point.");
+                }
+                return;
             }
+            queue_.pop_front();
+            attempts_ = 0;
 
             if (expects_response)
                 return;
@@ -105,6 +116,8 @@ namespace tether::bluetooth::ancs {
     void ControlPointSequencer::reset() {
         queue_.clear();
         in_flight_ = false;
+        attempts_ = 0;
+        retry_after_ = 0;
         assembler_.reset();
     }
 

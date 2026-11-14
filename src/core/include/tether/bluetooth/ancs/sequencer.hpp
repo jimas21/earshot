@@ -14,6 +14,9 @@ namespace tether::bluetooth::ancs {
     inline constexpr int REQUEST_TIMEOUT_SECONDS = 15;
     // Bounds how much work a burst of notifications can queue up.
     inline constexpr size_t MAX_QUEUED_REQUESTS = 64;
+    // A refused control-point write is retried this many times, this many seconds apart, before it is dropped.
+    inline constexpr int WRITE_ATTEMPTS = 3;
+    inline constexpr int WRITE_RETRY_SECONDS = 2;
 
     struct Request {
         CommandId command = CommandId::GetNotificationAttributes;
@@ -72,6 +75,8 @@ namespace tether::bluetooth::ancs {
         Request current_;
         bool in_flight_ = false;
         int64_t deadline_ = 0;
+        int64_t retry_after_ = 0;
+        int attempts_ = 0;
         DataSourceAssembler assembler_;
     };
 

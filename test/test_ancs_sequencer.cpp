@@ -206,10 +206,35 @@ TEST(AncsSequencer, FailsARequestWhoseWriteIsRefused) {
     auto sequencer = harness.make();
 
     sequencer.submit(build_notification_request(1, {NotificationAttributeId::AppIdentifier}));
-    sequencer.tick(0);
+    for (int i = 0; i < WRITE_ATTEMPTS; ++i)
+        sequencer.tick(static_cast<int64_t>(i) * WRITE_RETRY_SECONDS);
 
+    EXPECT_EQ(harness.writes.size(), static_cast<size_t>(WRITE_ATTEMPTS));
     EXPECT_EQ(harness.failures.size(), 1u);
     EXPECT_FALSE(sequencer.in_flight());
+}
+
+// BlueZ answers InProgress to every write while it is still busy with a stuck one; the rest of the queue
+// must wait, not be written, refused and dropped in the same instant.
+TEST(AncsSequencer, ARefusedWriteDoesNotBurnTheRestOfTheQueue) {
+    Harness harness;
+    harness.write_succeeds = false;
+    auto sequencer = harness.make();
+
+    for (uint32_t uid = 1; uid <= 5; ++uid)
+        sequencer.submit(build_notification_request(uid, {NotificationAttributeId::AppIdentifier}));
+    sequencer.tick(0);
+    sequencer.tick(0);
+
+    EXPECT_EQ(harness.writes.size(), 1u) << "one write, then a pause";
+    EXPECT_TRUE(harness.failures.empty()) << "a single refusal is retried, not dropped";
+    EXPECT_EQ(sequencer.queued(), 5u);
+
+    harness.write_succeeds = true;
+    sequencer.tick(WRITE_RETRY_SECONDS);
+    EXPECT_EQ(harness.writes.size(), 2u);
+    EXPECT_TRUE(sequencer.in_flight()) << "the same request went out again and now waits for its answer";
+    EXPECT_EQ(sequencer.queued(), 4u);
 }
 
 TEST(AncsSequencer, FailsTheRequestWhenItsResponseIsMalformed) {
