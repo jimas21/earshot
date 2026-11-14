@@ -143,50 +143,229 @@ test('all values are escaped', () => {
   assert.equal(p.w.pwned, undefined);
 });
 
-test('messages: list, open a thread, type with the text field, send, fail, retry, sent', () => {
+// Keys of the on-screen keyboard. The conversation never uses a text input: Steam's keyboard would take the focus
+// away from the quick menu, which closes, and the reply is lost.
+const keyBtn = (p, k) => p.doc.querySelector(`[data-act="key"][data-a="${k}"]`);
+const tap = (p, k) => { const b = keyBtn(p, k); assert.ok(b, 'no key ' + k); click(p, b); };
+const typeText = (p, s) => { for (const ch of s) tap(p, ch === ' ' ? 'space' : ch); };
+const draftText = (p) => p.doc.getElementById('earshot-draft').textContent;
+const THREAD = 'tel:+15550100';
+const OPEN = { thread: THREAD, messages: [{ handle: 'm1', body: 'hello there', timestamp: 1000, outgoing: false, read: true }] };
+const draftActions = (p) => p.w.actions.filter((a) => a.type === 'draft');
+const withReplies = (patch) => withState(Object.assign({ quick_replies: ['On my way', "Can't talk now, I'll call you back", 'OK', 'Yes', 'No'] }, patch));
+
+function openConversation(open = OPEN, patch = {}) {
+  const p = openPopup();
+  p.w.__earshotMenu.setState(withReplies());
+  click(p, byAct(p, 'tab', 'messages'));
+  click(p, byAct(p, 'open-thread', THREAD));
+  p.w.__earshotMenu.setState(withReplies(Object.assign({ open }, patch)));
+  return p;
+}
+
+// jsdom has no layout: give every element a scroll height we control and remember what scrollTop was set to.
+function fakeScroll(w) {
+  const tops = new WeakMap();
+  // 100 px per message bubble on top of a 900 px base: the height follows the content, as it does for real
+  Object.defineProperty(w.HTMLElement.prototype, 'scrollHeight', { configurable: true, get() { return 900 + 100 * this.querySelectorAll('.es-bub').length; } });
+  Object.defineProperty(w.HTMLElement.prototype, 'scrollTop', { configurable: true, get() { return tops.get(this) || 0; }, set(v) { tops.set(this, v); } });
+}
+
+test('the Phone tab pages are Calls, Messages, Notifications, Settings, and nothing says Alerts any more', () => {
   const p = openPopup();
   p.w.__earshotMenu.setState(BASE);
-  click(p, byAct(p, 'tab', 'messages'));
-  assert.match(text(p), /Pat Example/);
-  click(p, byAct(p, 'open-thread', 'tel:+15550100'));
-  assert.deepEqual(p.last(), { type: 'open_thread', thread: 'tel:+15550100' });
-  const open = { thread: 'tel:+15550100', messages: [{ handle: 'm1', body: 'hello there', timestamp: 1000, outgoing: false, read: true }] };
-  p.w.__earshotMenu.setState(withState({ open }));
-  const input = p.doc.getElementById('earshot-input');
-  assert.ok(input, 'a plain text input, so Steam shows its own keyboard');
-  assert.equal(input.getAttribute('type'), 'text');
+  const tabs = () => [...p.doc.querySelectorAll('#earshot-tabs button')];
+  assert.deepEqual(tabs().map((b) => b.getAttribute('data-a')), ['calls', 'messages', 'alerts', 'settings']);   // ids are unchanged: saved choices still load
+  assert.deepEqual(tabs().map((b) => b.textContent.replace(/\d+$/, '')), ['Calls', 'Messages', 'Notifications', 'Settings']);
+  assert.match(p.doc.getElementById('earshot-head').textContent, /Notifications here/);
+  for (const k of ['calls', 'messages', 'alerts', 'settings']) {
+    click(p, byAct(p, 'tab', k));
+    assert.doesNotMatch(text(p), /alert/i, k);
+  }
+  p.w.__earshotMenu.setState(withState({ priority: { mode: 'phone', frame_active: false, worn: false } }));
+  assert.match(p.doc.getElementById('earshot-head').textContent, /Notifications on phone/);
+  assert.doesNotMatch(text(p), /alert/i);
+});
+
+test('messages: list, open a thread, type on the keyboard, send, fail, retry, sent', () => {
+  const p = openConversation();
+  assert.equal(p.doc.querySelector('#earshot-overlay input, #earshot-overlay textarea, #earshot-overlay [contenteditable]'), null);
   assert.match(text(p), /hello there/);
-
-  // The text box survives state pushes (the keyboard must not be torn down mid-typing).
-  input.value = 'on my';
-  input.dispatchEvent(new p.w.Event('input', { bubbles: true }));
-  p.w.__earshotMenu.setState(withState({ open: { thread: open.thread, messages: open.messages.concat([{ handle: 'm2', body: 'later msg', timestamp: 1001, outgoing: false, read: true }]) } }));
-  assert.equal(p.doc.getElementById('earshot-input'), input);
-  assert.equal(input.value, 'on my');
+  assert.equal(byAct(p, 'send').disabled, true);          // nothing to send yet
+  typeText(p, 'on my');
+  assert.equal(draftText(p), 'On my');                     // the sentence starts with a capital
+  assert.equal(draftActions(p).pop().text, 'On my');       // the helper keeps the draft too
+  // state pushes do not disturb typing: the same nodes, the same text
+  const conv = p.doc.getElementById('earshot-conv'), kb = p.doc.getElementById('earshot-kb');
+  p.w.__earshotMenu.setState(withReplies({ open: { thread: THREAD, messages: OPEN.messages.concat([{ handle: 'm2', body: 'later msg', timestamp: 1001, outgoing: false, read: true }]) } }));
+  assert.equal(p.doc.getElementById('earshot-conv'), conv);
+  assert.equal(p.doc.getElementById('earshot-kb'), kb);
+  assert.equal(draftText(p), 'On my');
   assert.match(text(p), /later msg/);
-
-  input.value = 'on my way';
-  input.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  typeText(p, ' way');
+  assert.equal(draftText(p), 'On my way');
+  click(p, byAct(p, 'send'));
   const sent = p.last();
   assert.equal(sent.type, 'send');
-  assert.equal(sent.thread, 'tel:+15550100');
-  assert.equal(sent.text, 'on my way');
+  assert.equal(sent.thread, THREAD);
+  assert.equal(sent.text, 'On my way');
   assert.match(sent.cid, /^[A-Za-z0-9_.-]{1,40}$/);
-  assert.equal(input.value, '');
-  assert.match(text(p), /on my way/);
+  assert.deepEqual(draftActions(p).pop(), { type: 'draft', thread: THREAD, text: '' });   // the helper forgets the draft
+  assert.equal(byAct(p, 'send').disabled, true);
+  assert.match(text(p), /On my way/);
   assert.match(text(p), /Sending/);
 
-  p.w.__earshotMenu.setState(withState({ open, sends: [{ cid: sent.cid, thread: open.thread, status: 'failed', error: 'Phone busy' }] }));
-  assert.match(text(p), /Phone busy/);
+  p.w.__earshotMenu.setState(withReplies({ open: OPEN, sends: [{ cid: sent.cid, thread: THREAD, status: 'failed', error: 'Phone busy' }] }));
+  assert.match(text(p), /Not sent: Phone busy/);
+  assert.ok(p.doc.querySelector('.es-bub.es-fail'));
   click(p, byAct(p, 'resend', sent.cid));
   const again = p.last();
   assert.equal(again.type, 'send');
-  assert.equal(again.text, 'on my way');
+  assert.equal(again.text, 'On my way');
   assert.notEqual(again.cid, sent.cid);
 
-  p.w.__earshotMenu.setState(withState({ open, sends: [{ cid: again.cid, thread: open.thread, status: 'sent', error: '' }] }));
+  p.w.__earshotMenu.setState(withReplies({ open: OPEN, sends: [{ cid: again.cid, thread: THREAD, status: 'sent', error: '' }] }));
   assert.doesNotMatch(text(p), /Sending/);
   assert.doesNotMatch(text(p), /Phone busy/);
+  assert.ok(p.doc.querySelector('.es-bub.es-sentok'));
+  assert.match(p.doc.querySelector('.es-bub.es-sentok .es-meta').textContent, /^Sent/);
+  // once the conversation itself shows the message, the local copy goes away
+  p.w.__earshotMenu.setState(withReplies({ open: { thread: THREAD, messages: OPEN.messages.concat([{ handle: 'm3', body: 'On my way', timestamp: 1002, outgoing: true, read: true }]) }, sends: [{ cid: again.cid, thread: THREAD, status: 'sent', error: '' }] }));
+  assert.equal(p.doc.querySelector('.es-bub.es-sentok'), null);
+  assert.equal([...p.doc.querySelectorAll('.es-bub')].filter((b) => /On my way/.test(b.textContent)).length, 1);
+});
+
+test('typing never gives focus to anything: no input, no text area, the focus stays where it was', () => {
+  const p = openConversation();
+  const before = p.doc.activeElement;
+  typeText(p, 'hi');
+  assert.equal(p.doc.querySelectorAll('input, textarea, [contenteditable]').length, 0);
+  assert.ok(!/^(INPUT|TEXTAREA)$/.test(p.doc.activeElement.tagName));
+  assert.equal(p.doc.activeElement, before);
+  assert.equal(draftText(p), 'Hi');
+});
+
+test('keyboard: capitals at the start of a sentence, Shift once and twice, numbers page, Del, space', () => {
+  const p = openConversation();
+  typeText(p, 'hi');
+  assert.equal(draftText(p), 'Hi');
+  assert.equal(keyBtn(p, 'q').textContent, 'q');           // lower case again after the first letter
+  tap(p, 'shift'); tap(p, 'x');
+  assert.equal(draftText(p), 'HiX');
+  tap(p, 'y');
+  assert.equal(draftText(p), 'HiXy');
+  tap(p, 'shift'); tap(p, 'shift');                         // twice: caps lock
+  typeText(p, 'ab');
+  assert.equal(draftText(p), 'HiXyAB');
+  tap(p, 'shift');                                          // off again
+  tap(p, 'c');
+  assert.equal(draftText(p), 'HiXyABc');
+  tap(p, 'mode');
+  assert.ok(keyBtn(p, '1') && !keyBtn(p, 'q'));
+  tap(p, '1'); tap(p, '!');
+  assert.equal(draftText(p), 'HiXyABc1!');
+  tap(p, 'mode');
+  assert.ok(keyBtn(p, 'q'));
+  tap(p, 'back'); tap(p, 'back');
+  assert.equal(draftText(p), 'HiXyABc');
+  tap(p, 'back');
+  typeText(p, '. a');                                       // after ". " the next letter is a capital
+  assert.equal(draftText(p), 'HiXyAB. A');
+  for (let i = 0; i < 20; i++) tap(p, 'back');
+  assert.equal(p.doc.querySelector('.es-hint').textContent, 'Tap the keys to write a reply');   // an empty draft shows the hint
+  assert.equal(byAct(p, 'send').disabled, true);
+});
+
+test('quick replies: one tap sends, the draft is left alone', () => {
+  const p = openConversation();
+  typeText(p, 'wait');
+  const buttons = [...p.doc.querySelectorAll('#earshot-quick [data-act="quick"]')];
+  assert.deepEqual(buttons.map((b) => b.textContent), ['On my way', "Can't talk now, I'll call you back", 'OK', 'Yes', 'No']);
+  click(p, buttons[1]);
+  const sent = p.last();
+  assert.equal(sent.type, 'send');
+  assert.equal(sent.thread, THREAD);
+  assert.equal(sent.text, "Can't talk now, I'll call you back");
+  assert.equal(draftText(p), 'Wait');
+  assert.match(text(p), /Sending/);
+  click(p, buttons[4]);
+  assert.equal(p.last().text, 'No');
+  // an index that does not exist sends nothing
+  const n = p.w.actions.length;
+  p.doc.getElementById('earshot-quick').insertAdjacentHTML('beforeend', '<button data-act="quick" data-a="99" id="ghost">x</button>');
+  click(p, p.doc.getElementById('ghost'));
+  assert.equal(p.w.actions.length, n);
+});
+
+test('the draft survives a re-render, the tab being left, and the menu closing and reopening', () => {
+  const p = openConversation();
+  typeText(p, 'on my');
+  p.w.__earshotMenu.setState(withReplies({ open: OPEN }));             // a state push
+  assert.equal(draftText(p), 'On my');
+  click(p, byAct(p, 'tab', 'settings'));                                 // leaving the conversation tab closes it...
+  assert.deepEqual(p.w.actions.filter((a) => a.type === 'close_thread').length, 1);
+  p.w.__earshotMenu.setState(withReplies({ open: null }));
+  click(p, byAct(p, 'tab', 'messages'));
+  click(p, byAct(p, 'open-thread', THREAD));
+  p.w.__earshotMenu.setState(withReplies({ open: OPEN }));
+  assert.equal(draftText(p), 'On my');                                  // ...and the draft is still there
+  click(p, p.doc.getElementById('t1'));                                   // the menu closes (another Steam tab)
+  click(p, p.doc.getElementById('earshot-qam-tab'));                      // and opens again
+  assert.equal(draftText(p), 'On my');
+  // the popup page itself goes away when the menu closes: a new page starts from what the helper kept
+  const q = openPopup();
+  q.w.__earshotMenu.setState(withReplies({ open: Object.assign({ draft: 'On my' }, OPEN) }));
+  click(q, byAct(q, 'tab', 'messages'));
+  assert.equal(draftText(q), 'On my');
+  tap(q, 'space'); tap(q, 'w');
+  assert.equal(draftText(q), 'On my w');
+  assert.equal(draftActions(q).pop().text, 'On my w');
+});
+
+test('a conversation opens at the newest message and keeps following new ones, unless the person scrolled up', () => {
+  const p = openPopup();
+  fakeScroll(p.w);
+  p.w.__earshotMenu.setState(withReplies());
+  click(p, byAct(p, 'tab', 'messages'));
+  click(p, byAct(p, 'open-thread', THREAD));
+  p.w.__earshotMenu.setState(withReplies({ open: OPEN }));
+  const box = () => p.doc.getElementById('earshot-msgs');
+  assert.equal(box().scrollTop, 1000);                                   // the bottom
+  p.w.__earshotMenu.setState(withReplies({ open: { thread: THREAD, messages: OPEN.messages.concat([{ handle: 'm2', body: 'newest', timestamp: 1001, outgoing: false, read: true }]) } }));
+  assert.equal(box().scrollTop, 1100);                                   // follows a new message
+  box().scrollTop = 100;                                                  // the person reads older messages
+  p.w.__earshotMenu.setState(withReplies({ open: { thread: THREAD, messages: OPEN.messages.concat([{ handle: 'm2', body: 'newest', timestamp: 1001, outgoing: false, read: true }, { handle: 'm3', body: 'even newer', timestamp: 1002, outgoing: false, read: true }]) } }));
+  assert.equal(box().scrollTop, 100);
+  // reopening the same conversation from the list lands at the bottom again
+  click(p, byAct(p, 'back'));
+  click(p, byAct(p, 'open-thread', THREAD));
+  p.w.__earshotMenu.setState(withReplies({ open: OPEN }));
+  assert.equal(box().scrollTop, 1000);
+});
+
+test('conversation view: the messages scroll, the keyboard stays in view, the header gets out of the way', () => {
+  const p = openConversation();
+  const overlay = p.doc.getElementById('earshot-overlay');
+  assert.ok(overlay.classList.contains('es-convmode'));
+  assert.equal(p.doc.getElementById('earshot-head').textContent, '');
+  const conv = p.doc.getElementById('earshot-conv');
+  const order = [...conv.children].map((c) => c.id || c.className);
+  assert.deepEqual(order.slice(-2), ['earshot-msgs', 'es-reply']);       // messages above, quick replies + draft + keys last
+  assert.deepEqual([...conv.querySelector('.es-reply').children].map((c) => c.id), ['earshot-quick', 'earshot-draftrow', 'earshot-kb']);
+  click(p, byAct(p, 'back'));
+  assert.ok(!overlay.classList.contains('es-convmode'));
+  assert.match(p.doc.getElementById('earshot-head').textContent, /Test Phone/);
+});
+
+test('a conversation that cannot be replied to has no keyboard and no quick replies', () => {
+  const p = openPopup();
+  const s = withReplies({ open: { thread: 'tel:12345', messages: [] } });
+  s.threads = [{ thread: 'tel:12345', name: '12345', preview: '', timestamp: 1, unread: 0, repliable: false, reply_reason: 'No reply route.' }];
+  p.w.__earshotMenu.setState(s);
+  click(p, byAct(p, 'tab', 'messages'));
+  assert.equal(p.doc.getElementById('earshot-kb'), null);
+  assert.equal(p.doc.getElementById('earshot-quick'), null);
+  assert.match(text(p), /No reply route\./);
 });
 
 test('empty text is not sent; Back closes the thread', () => {
@@ -198,16 +377,6 @@ test('empty text is not sent; Back closes the thread', () => {
   assert.equal(p.w.actions.length, before);
   click(p, byAct(p, 'back'));
   assert.deepEqual(p.last(), { type: 'close_thread' });
-});
-
-test('a conversation that cannot be replied to shows why instead of a text box', () => {
-  const p = openPopup();
-  const s = withState({ open: { thread: 'tel:12345', messages: [] } });
-  s.threads = [{ thread: 'tel:12345', name: '12345', preview: '', timestamp: 1, unread: 0, repliable: false, reply_reason: 'No reply route.' }];
-  p.w.__earshotMenu.setState(s);
-  click(p, byAct(p, 'tab', 'messages'));
-  assert.equal(p.doc.getElementById('earshot-input'), null);
-  assert.match(text(p), /No reply route\./);
 });
 
 test('not set up yet: says what is wrong in plain words, never a command, keeps Settings reachable', () => {

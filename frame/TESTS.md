@@ -93,8 +93,10 @@ layout). Stop the upstream Tether test daemon from test 2 first. Then:
    This Device instruction and Try again then works; close the quick menu mid-pairing and reopen it.
    If the engine has no `bt_pair_listen`, the tab falls back to Search by itself.
 5. A text arrives: a SteamVR notification shows, the message appears under Messages.
-6. Reply from the Phone tab: focusing the text field brings up the Frame keyboard; the
-   reply arrives on the other phone; the tab shows "sent".
+6. Reply from the Phone tab: the conversation opens at the newest message with the
+   on-screen keyboard under it and the menu stays open while typing (no Steam keyboard
+   appears); close and reopen the menu: the draft is still there; a quick reply sends in
+   one tap; the reply arrives on the other phone; the tab shows "sent".
 7. A call: notification plus the Answer/Decline card; Decline ends it on the phone.
 8. Settings: switch Priority to "Always phone": no notifications in the headset, calls
    stay on the phone. Back to Auto.

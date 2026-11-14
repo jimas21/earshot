@@ -29,9 +29,13 @@ helper as the user unit `earshot-steamui.service`.
 - **Calls.** An incoming call puts an Answer / Decline card on top of the Phone tab and a
   "Call" mark on the bar. Answer and Decline use the call commands when Hands-Free is up
   and the iPhone's notification actions otherwise.
-- **Replies.** The Messages tab lists one-to-one conversations. Its text box is a plain
-  text input, so Steam's own keyboard handles typing. Each message shows sending, sent or
-  the reason it failed.
+- **Replies.** The Messages tab lists one-to-one conversations. A conversation opens at
+  its newest message with a keyboard drawn inside the tab (letters, numbers, Shift, Del,
+  Send) and one-tap quick replies above it. There is deliberately no text input: Steam's
+  own keyboard is a separate overlay, taking the focus closes the quick menu and loses the
+  reply. The draft is kept by the helper per conversation, so it survives the menu closing.
+  Each message shows sending, sent or the reason it failed. The quick replies come from
+  `quick_replies` in `~/.config/earshot/settings.json` (up to 8).
 - **Pairing.** The Phone tab pairs the iPhone itself, with no terminal and no root. The
   helper makes the headset visible for two minutes (`bt_pair_listen`), the user taps it
   under Other Devices on the iPhone, both show a 6-digit code, and the user confirms it in

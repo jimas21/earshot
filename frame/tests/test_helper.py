@@ -588,6 +588,37 @@ class ReplyTests(unittest.TestCase):
         rig.settle_for(0.3)
         self.assertEqual(len(rig.tether.commands("bt_send_message")), 1)
 
+    def test_a_draft_is_kept_here_per_conversation_and_comes_back_when_the_menu_reopens(self):
+        rig = Rig(self)
+        rig.start()
+        rig.action(type="draft", thread="tel:+15550100", text="on my wa")
+        rig.action(type="draft", thread="tel:12345", text="other")
+        rig.action(type="draft", thread="no-such-thread", text="x")     # unknown conversations are ignored
+        rig.action(type="draft", thread="tel:+15550100", text=5)        # so is anything that is not text
+        rig.settle_for(0.3)
+        self.assertEqual(dict(rig.helper.drafts), {"tel:+15550100": "on my wa", "tel:12345": "other"})
+        rig.action(type="open_thread", thread="tel:+15550100")
+        self.assertTrue(rig.pump(lambda: rig.state()["open"] and rig.state()["open"]["draft"] == "on my wa", 2))
+        rig.action(type="draft", thread="tel:+15550100", text="  ")     # empty drops it
+        rig.settle_for(0.2)
+        self.assertEqual(list(rig.helper.drafts), ["tel:12345"])
+        rig.action(type="draft", thread="tel:12345", text="y" * 5000)   # too long to be a draft of ours: ignored
+        rig.settle_for(0.2)
+        self.assertEqual(rig.helper.drafts["tel:12345"], "other")
+
+    def test_quick_replies_are_in_the_state_and_come_from_settings(self):
+        rig = Rig(self)
+        rig.start()
+        replies = rig.state()["quick_replies"]
+        self.assertEqual(replies[:2], ["On my way", "Can't talk now, I'll call you back"])
+        self.assertTrue(rig.helper.settings.set("quick_replies", ["Later"]))
+        self.assertFalse(rig.helper.settings.set("quick_replies", [""]))
+        self.assertFalse(rig.helper.settings.set("quick_replies", ["x"] * 9))
+        self.assertEqual(rig.helper.view_state()["quick_replies"], ["Later"])
+        rig.action(type="set_setting", key="quick_replies", value=["hacked"])   # not settable from the menu
+        rig.settle_for(0.2)
+        self.assertEqual(rig.helper.settings.get("quick_replies"), ["Later"])
+
     def test_group_threads_are_left_out_and_open_requests_messages(self):
         rig = Rig(self)
         rig.start()

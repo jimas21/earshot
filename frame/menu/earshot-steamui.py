@@ -114,6 +114,7 @@ SETTING_SPECS = {
     "presence_source": lambda v: v in ("steamvr", "file"),
     "presence_file": lambda v: isinstance(v, str) and len(v) <= 300,
     "presence_worn_values": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v) and len(v) <= 10,
+    "quick_replies": lambda v: isinstance(v, list) and len(v) <= 8 and all(isinstance(x, str) and 0 < len(x.strip()) <= 120 for x in v),
 }
 SETTING_DEFAULTS = {
     "priority": "auto",
@@ -124,6 +125,8 @@ SETTING_DEFAULTS = {
     "presence_source": "steamvr",
     "presence_file": "",
     "presence_worn_values": ["1", "worn", "true"],
+    # One-tap replies above the on-screen keyboard. Edit them in settings.json (no editor in the menu yet).
+    "quick_replies": ["On my way", "Can't talk now, I'll call you back", "OK", "Yes", "No"],
 }
 
 
@@ -1849,6 +1852,7 @@ class Helper:
         self.call_error = ""
         self.announced_calls = set()
         self.sends = collections.OrderedDict()           # op id -> {thread, status, error, at}
+        self.drafts = collections.OrderedDict()          # thread -> unsent text, so it survives the menu closing
         self.seen_uids = set()
         self.ancs_ready_at = None
         self.map_open_at = None
@@ -2437,6 +2441,22 @@ class Helper:
     def a_close_thread(self, a):
         self.open_thread = None
 
+    def a_draft(self, a):
+        """The text typed so far in one conversation. Kept here, not in the page: the quick menu's page goes away
+        whenever the menu closes."""
+        thread, text = a.get("thread"), a.get("text")
+        if not (isinstance(thread, str) and isinstance(text, str)) or len(text) > MAX_TEXT_SEND:
+            return
+        if not any(t.get("thread") == thread for t in self.threads):
+            return
+        if text.strip():
+            self.drafts.pop(thread, None)
+            self.drafts[thread] = text
+            while len(self.drafts) > MAX_THREADS:
+                self.drafts.popitem(last=False)
+        else:
+            self.drafts.pop(thread, None)
+
     def a_send(self, a):
         thread, text, cid = a.get("thread"), a.get("text"), a.get("cid")
         if not (isinstance(thread, str) and isinstance(text, str) and isinstance(cid, str) and OP_ID.match(cid)):
@@ -2703,7 +2723,7 @@ class Helper:
                    for t in self.threads if not t.get("group")][:MAX_THREADS]
         opened = None
         if self.open_thread:
-            opened = {"thread": self.open_thread,
+            opened = {"thread": self.open_thread, "draft": self.drafts.get(self.open_thread, ""),
                       "messages": [{"handle": m.get("handle"), "body": trim(m.get("body"), 1000), "timestamp": m.get("timestamp") or 0,
                                     "outgoing": bool(m.get("outgoing")), "read": bool(m.get("read", True))}
                                    for m in self.messages.get(self.open_thread, [])][-MAX_MESSAGES:]}
@@ -2722,6 +2742,7 @@ class Helper:
             "threads": threads,
             "open": opened,
             "sends": sends,
+            "quick_replies": [trim(r, 120) for r in self.settings.get("quick_replies")],
             "apps": self.apps_view(),
             "settings": {k: self.settings.get(k) for k in ("priority", "alerts", "preview", "auto_update")},
             "update": {"status": status, "versions": self.installed_versions()},

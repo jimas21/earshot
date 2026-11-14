@@ -104,6 +104,28 @@
   .es-newchip { margin:0; }
   .es-item.es-new { background:#14263a; box-shadow:inset 3px 0 0 #ED18BF; }
   .es-sec { padding:6px 14px 2px; }
+  #earshot-overlay.es-open.es-convmode { display:flex; flex-direction:column; overflow:hidden; padding-bottom:0; }
+  .es-convmode .es-tabs, .es-convmode #earshot-call { flex:none; }
+  .es-convmode #earshot-body { flex:1; min-height:0; display:flex; flex-direction:column; }
+  .es-conv { flex:1; min-height:0; display:flex; flex-direction:column; }
+  .es-conv .es-msgs { flex:1; min-height:0; overflow-y:auto; padding:4px 10px 8px; }
+  .es-conv .es-bub { font-size:17px; line-height:1.3; padding:8px 12px; }
+  .es-conv .es-bub .es-meta { font-size:11px; }
+  .es-bub.es-sentok { opacity:.85; }
+  .es-reply { flex:none; padding:4px 8px 8px; background:#10161d; border-top:1px solid #23262e; }
+  .es-quick { display:flex; flex-wrap:wrap; gap:6px; max-height:86px; overflow-y:auto; padding:2px 0 6px; }
+  .es-qr { border:0; border-radius:14px; background:#23262e; color:#dcdedf; font:inherit; font-size:14px; padding:7px 12px; cursor:pointer; }
+  .es-draftrow { display:flex; gap:8px; align-items:stretch; padding-bottom:6px; }
+  .es-draft { flex:1; min-width:0; min-height:36px; max-height:64px; overflow-y:auto; box-sizing:border-box; padding:7px 10px; border:1px solid #3d4450; border-radius:4px; background:#0a0f14; color:#fff; font-size:17px; line-height:1.25; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .es-hint { color:#6b7480; }
+  .es-caret { display:inline-block; width:2px; height:1.1em; margin-left:1px; vertical-align:text-bottom; background:#1a9fff; }
+  .es-sendbtn { min-width:76px; font-size:16px; font-weight:700; }
+  .es-sendbtn:disabled { opacity:.45; cursor:default; }
+  .es-krow { display:flex; gap:4px; margin-bottom:4px; }
+  .es-key { flex:1 1 0; min-width:0; height:40px; border:0; border-radius:5px; background:#2c313a; color:#fff; font:inherit; font-size:18px; cursor:pointer; padding:0; }
+  .es-key.es-k-shift, .es-key.es-k-back, .es-key.es-k-mode { flex:1.6 1 0; background:#3d4450; font-size:14px; }
+  .es-key.es-k-space { flex:4 1 0; font-size:14px; color:#b8bcbf; }
+  .es-key.es-on { background:#1a9fff; }
   .es-h { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#8b929a; margin:14px 0 6px; }
   .es-msg { color:#b8bcbf; padding:12px 14px; line-height:1.35; }
   .es-card { margin:8px 10px; padding:10px 12px; border-radius:4px; background:#1b2b1d; border:1px solid #2f6d2c; }
@@ -330,19 +352,94 @@
     return (S.threads || []).find((t) => t.thread === o.thread) || { name: 'Conversation', repliable: true };
   }
 
+  // ---------- messages: a conversation with an on-screen keyboard ----------
+  // Steam's own keyboard is a separate overlay: opening it takes focus away from the quick menu, which then closes
+  // and the reply is lost. So the keyboard is drawn here, as plain buttons, and nothing in the menu ever takes focus:
+  // there is no <input> and no <textarea>, only a div that shows the draft. The draft itself is kept by the helper
+  // (it survives the menu closing), the page keeps its own copy while it is open.
+  const KB_ROWS = {
+    abc: [['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'], ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
+      ['shift', 'z', 'x', 'c', 'v', 'b', 'n', 'm', 'back'], ['mode', ',', 'space', '.', '?']],
+    num: [['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'], ['-', '/', ':', ';', '(', ')', '$', '&', '@', '"'],
+      ['.', ',', '?', '!', "'", '%', '+', '=', 'back'], ['mode', '#', 'space', '*', '_']],
+  };
+  const kb = { page: 'abc', shift: 'off' };     // shift: off | once | lock | lower (a capital the sentence start asked for, declined)
+  const MAX_DRAFT = 2000;
+  const autoCap = (d) => /^\s*$/.test(d) || /[.!?]\s+$/.test(d);
+  const isUpper = (d) => kb.shift === 'lock' || kb.shift === 'once' || (kb.shift === 'off' && autoCap(d));
+  function draftOf(thread) {
+    if (drafts[thread] !== undefined) return drafts[thread];
+    const o = S && S.open;
+    return o && o.thread === thread && typeof o.draft === 'string' ? o.draft : '';
+  }
+  function keyLabel(k, up) {
+    if (k === 'shift') return kb.shift === 'lock' ? 'SHIFT' : 'Shift';
+    if (k === 'back') return 'Del';
+    if (k === 'mode') return kb.page === 'abc' ? '123' : 'ABC';
+    if (k === 'space') return 'space';
+    return kb.page === 'abc' && up ? k.toUpperCase() : k;
+  }
+  function kbHtml(d) {
+    const up = isUpper(d);
+    return KB_ROWS[kb.page].map((row) => '<div class="es-krow">' + row.map((k) =>
+      `<button class="es-key es-k-${k.length > 1 ? k : 'c'}${k === 'shift' && up ? ' es-on' : ''}" data-act="key" data-a="${esc(k)}">${esc(keyLabel(k, up))}</button>`).join('') + '</div>').join('');
+  }
+  function draftRowHtml(d) {
+    return `<div class="es-draft" id="earshot-draft">${d ? esc(d) + '<span class="es-caret"></span>' : '<span class="es-hint">Tap the keys to write a reply</span>'}</div>` +
+      `<button class="es-btn es-blue es-sendbtn" data-act="send"${d.trim() ? '' : ' disabled'}>Send</button>`;
+  }
+  function quickHtml() {
+    const list = S && Array.isArray(S.quick_replies) ? S.quick_replies : [];
+    return list.map((t, i) => `<button class="es-qr" data-act="quick" data-a="${i}">${esc(t)}</button>`).join('');
+  }
+  function refreshReply() {
+    if (!S || !S.open) return;
+    const d = draftOf(S.open.thread);
+    setHtml('earshot-quick', quickHtml());
+    setHtml('earshot-draftrow', draftRowHtml(d));
+    setHtml('earshot-kb', kbHtml(d));
+    const box = document.getElementById('earshot-draft');
+    if (box) box.scrollTop = box.scrollHeight;
+  }
+  function setDraft(thread, d) {
+    drafts[thread] = d;
+    act({ type: 'draft', thread, text: d });
+    refreshReply();
+  }
+  function typeKey(k) {
+    const o = S && S.open;
+    if (!o) return;
+    let d = draftOf(o.thread);
+    if (k === 'shift') {
+      kb.shift = kb.shift === 'once' ? 'lock' : kb.shift === 'lock' ? 'off' : kb.shift === 'lower' ? 'once' : (autoCap(d) ? 'lower' : 'once');
+      refreshReply(); return;
+    }
+    if (k === 'mode') { kb.page = kb.page === 'abc' ? 'num' : 'abc'; refreshReply(); return; }
+    if (k === 'back') d = Array.from(d).slice(0, -1).join('');
+    else {
+      const ch = k === 'space' ? ' ' : (kb.page === 'abc' && isUpper(d) ? k.toUpperCase() : k);
+      if (d.length + ch.length > MAX_DRAFT) return;
+      d += ch;
+      if (kb.shift === 'once' || kb.shift === 'lower') kb.shift = 'off';
+    }
+    setDraft(o.thread, d);
+  }
+
   function bubblesHtml() {
     const o = S.open;
-    let h = (o.messages || []).map((m) => `<div class="es-bub${m.outgoing ? ' es-out' : ''}">${esc(m.body)}<span class="es-meta">${esc(whenText(m.timestamp))}</span></div>`).join('');
+    const msgs = o.messages || [];
+    let h = msgs.map((m) => `<div class="es-bub${m.outgoing ? ' es-out' : ''}">${esc(m.body)}<span class="es-meta">${esc(whenText(m.timestamp))}</span></div>`).join('');
     const status = {};
     for (const s of (S.sends || [])) status[s.cid] = s;
     for (const cid of Object.keys(local)) {
       const l = local[cid];
       if (l.thread !== o.thread) continue;
       const s = status[cid];
-      if (s && s.status === 'sent') { delete local[cid]; continue; }
-      const failed = s && s.status === 'failed';
-      h += `<div class="es-bub es-out ${failed ? 'es-fail' : 'es-pend'}">${esc(l.text)}<span class="es-meta">${failed ? esc(s.error || 'Not sent') : 'Sending…'}` +
-        (failed ? ` <button class="es-btn es-small" data-act="resend" data-a="${esc(cid)}">Retry</button> <button class="es-btn es-small" data-act="discard" data-a="${esc(cid)}">Discard</button>` : '') + '</span></div>';
+      // Once the conversation itself shows what was sent, the local copy is not needed any more.
+      if (s && s.status === 'sent' && msgs.slice(-10).some((m) => m.outgoing && String(m.body).trim() === l.text.trim())) { delete local[cid]; continue; }
+      const failed = s && s.status === 'failed', sent = s && s.status === 'sent';
+      h += `<div class="es-bub es-out ${failed ? 'es-fail' : sent ? 'es-sentok' : 'es-pend'}">${esc(l.text)}<span class="es-meta">${failed ? 'Not sent: ' + esc(s.error || 'no reason given') : sent ? 'Sent' : 'Sending…'}` +
+        (failed ? ` <button class="es-btn es-small" data-act="resend" data-a="${esc(cid)}">Try again</button> <button class="es-btn es-small" data-act="discard" data-a="${esc(cid)}">Discard</button>` : '') + '</span></div>';
     }
     return h || '<div class="es-msg">No messages loaded yet.</div>';
   }
@@ -350,12 +447,19 @@
   function threadView() {
     const meta = threadMeta();
     const can = meta.repliable !== false;
-    return `<div class="es-bar"><button class="es-btn es-small" data-act="back">Back</button><span class="es-grow">${esc(meta.name || 'Conversation')}</span></div>` +
+    const d = draftOf(S.open.thread);
+    return `<div class="es-conv" id="earshot-conv" data-thread="${esc(S.open.thread)}" data-can="${can}">` +
+      `<div class="es-bar"><button class="es-btn es-small" data-act="back">Back</button><span class="es-grow" id="earshot-convname">${esc(meta.name || 'Conversation')}</span></div>` +
       `<div class="es-msgs" id="earshot-msgs">${bubblesHtml()}</div>` +
       (can
-        ? `<div class="es-compose" id="earshot-composer" data-thread="${esc(S.open.thread)}"><input type="text" id="earshot-input" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Message" aria-label="Message">` +
-          `<button class="es-btn es-blue" data-act="send">Send</button></div>`
-        : `<div class="es-msg">${esc(meta.reply_reason || 'This conversation cannot be replied to.')}</div>`);
+        ? `<div class="es-reply"><div class="es-quick" id="earshot-quick">${quickHtml()}</div><div class="es-draftrow" id="earshot-draftrow">${draftRowHtml(d)}</div><div class="es-kb" id="earshot-kb">${kbHtml(d)}</div></div>`
+        : `<div class="es-msg">${esc(meta.reply_reason || 'This conversation cannot be replied to.')}</div>`) + '</div>';
+  }
+
+  // A conversation opens at its newest message, like on a phone.
+  function scrollNewest() {
+    const box = document.getElementById('earshot-msgs');
+    if (box) box.scrollTop = box.scrollHeight;
   }
 
   function pageMessages() {
@@ -625,8 +729,6 @@
       overlay.dataset.esVersion = VERSION;
       overlay.innerHTML = '<div id="earshot-pair"></div><div id="earshot-head"></div><div id="earshot-call"></div><div class="es-tabs" id="earshot-tabs"></div><div id="earshot-body"></div>';
       overlay.addEventListener('click', onMenuEvent);
-      overlay.addEventListener('keydown', onKey);
-      overlay.addEventListener('input', onInput);
       const release = () => { clearTimeout(releaseTimer); interacting = false; if (renderQueued) { renderQueued = false; render(); } };
       overlay.addEventListener('pointerdown', () => { interacting = true; clearTimeout(releaseTimer); releaseTimer = setTimeout(release, 5000); }, true);
       overlay.addEventListener('pointerup', () => { clearTimeout(releaseTimer); releaseTimer = setTimeout(release, 400); }, true);
@@ -675,30 +777,30 @@
   }
 
   // ---------- events ----------
-  function composerInput() { return document.getElementById('earshot-input'); }
-  function doSend(resendCid) {
-    if (!S || !S.open) return;
-    const thread = S.open.thread;
-    let text, cid;
-    if (resendCid) {
-      const l = local[resendCid]; if (!l) return;
-      text = l.text; delete local[resendCid];
-    } else {
-      const input = composerInput(); if (!input) return;
-      text = input.value.trim(); input.value = ''; drafts[thread] = '';
-    }
+  function sendText(thread, text) {
+    text = String(text || '').trim();
     if (!text) return;
-    cid = 'c' + Date.now().toString(36) + (++cidCounter);
+    const cid = 'c' + Date.now().toString(36) + (++cidCounter);
     local[cid] = { thread, text };
     act({ type: 'send', thread, text, cid });
     render();
-    const box = document.getElementById('earshot-msgs'); if (box) box.scrollTop = box.scrollHeight;
+    scrollNewest();
   }
-  function onInput(ev) {
-    if (ev.target && ev.target.id === 'earshot-input' && S && S.open) drafts[S.open.thread] = ev.target.value;
-  }
-  function onKey(ev) {
-    if (ev.target && ev.target.id === 'earshot-input' && ev.key === 'Enter') { ev.preventDefault(); doSend(); }
+  function doSend(resendCid) {
+    if (!S || !S.open) return;
+    const thread = S.open.thread;
+    if (resendCid) {
+      const l = local[resendCid]; if (!l) return;
+      delete local[resendCid];
+      sendText(l.thread, l.text);
+      return;
+    }
+    const d = draftOf(thread);
+    if (!d.trim()) return;
+    drafts[thread] = '';
+    act({ type: 'draft', thread, text: '' });
+    sendText(thread, d);
+    refreshReply();
   }
   function onMenuEvent(ev) {
     const el = ev.target.closest && ev.target.closest('[data-act]');
@@ -716,6 +818,8 @@
       case 'open-thread': act({ type: 'open_thread', thread: a }); if (S) S.open = { thread: a, messages: [] }; render(true); break;
       case 'back': act({ type: 'close_thread' }); if (S) S.open = null; render(true); break;
       case 'send': doSend(); break;
+      case 'key': typeKey(a); break;
+      case 'quick': if (S && S.open) sendText(S.open.thread, (S.quick_replies || [])[Number(a)]); break;
       case 'resend': doSend(a); break;
       case 'discard': delete local[a]; render(); break;
       case 'setting-set': act({ type: 'set_setting', key: a, value: b }); break;
@@ -750,6 +854,8 @@
     const overlay = document.getElementById(OVERLAY_ID);
     if (!overlay || !menuOpen) { updateTabBadge(); return; }
     if (interacting && !force) { renderQueued = true; return; }
+    const inConv = !!(S && !S.pair && !(S.setup && ui.tab !== 'settings') && ui.tab === 'messages' && S.open);
+    overlay.classList.toggle('es-convmode', inConv);
     if (S && !S.pair && !(S.setup && ui.tab !== 'settings') && ui.tab === 'alerts') markAlertsSeen(); else fresh.clear();
     updateTabBadge();
     const body = document.getElementById('earshot-body');
@@ -767,7 +873,7 @@
     }
     lastPairPhase = null;
     setHtml('earshot-pair', '');
-    setHtml('earshot-head', headHtml());
+    setHtml('earshot-head', inConv ? '' : headHtml());
     setHtml('earshot-call', callCardHtml());
     setHtml('earshot-tabs', tabsHtml());
     if (!S) { setHtml('earshot-body', '<div class="es-msg">Waiting for the Earshot helper…</div>'); return; }
@@ -775,20 +881,26 @@
     if (ui.tab === 'settings') { setHtml('earshot-body', pageSettings()); return; }
     if (ui.tab === 'alerts') { setHtml('earshot-body', pageAlerts()); return; }
     if (ui.tab === 'messages') {
-      const composer = document.getElementById('earshot-composer');
-      if (S.open && composer && composer.dataset.thread === S.open.thread && body.contains(composer)) {
-        // Keep the text box (and Steam's keyboard) alive: only refresh the bubbles and title.
-        const box = setHtml('earshot-msgs', bubblesHtml());
-        const near = box && box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-        if (near && box) box.scrollTop = box.scrollHeight;
+      const conv = document.getElementById('earshot-conv');
+      if (S.open) {
+        const can = threadMeta().repliable !== false;
+        if (conv && conv.dataset.thread === S.open.thread && conv.dataset.can === String(can) && body.contains(conv)) {
+          // Refresh in place: the keyboard and the scroll position of the messages stay where they are.
+          const box = document.getElementById('earshot-msgs');
+          const wasNear = !box || box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+          setHtml('earshot-msgs', bubblesHtml());
+          if (wasNear) scrollNewest();
+          const name = document.getElementById('earshot-convname'); if (name) name.textContent = threadMeta().name || 'Conversation';
+          if (can) refreshReply();
+          body.__esHtml = null;
+          return;
+        }
+        setHtml('earshot-body', threadView());
+        scrollNewest();
+        requestAnimationFrame(scrollNewest);
         return;
       }
-      setHtml('earshot-body', pageMessages());
-      const input = composerInput();
-      if (input && S.open) {
-        input.value = drafts[S.open.thread] || '';
-        const box = document.getElementById('earshot-msgs'); if (box) box.scrollTop = box.scrollHeight;
-      }
+      setHtml('earshot-body', threadList());
       return;
     }
     setHtml('earshot-body', pageCalls());
