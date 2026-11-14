@@ -355,14 +355,29 @@ class PriorityTests(unittest.TestCase):
         self.assertEqual(rig.vrcmd_texts(), [])
         self.assertFalse(rig.state()["priority"]["frame_active"])
 
-    def test_override_always_frame_while_not_worn(self):
+    def test_the_old_always_frame_value_now_means_while_wearing(self):
         rig = Rig(self, worn=False)
         rig.start()
-        rig.action(type="set_setting", key="priority", value="frame")
-        self.assertTrue(rig.pump(lambda: rig.busctl_methods() == ["DisconnectProfile", "Disconnect"], 2))
+        rig.action(type="set_setting", key="priority", value="frame")   # an old page, or an old file
+        rig.settle_for(0.3)
+        self.assertEqual(rig.helper.settings.get("priority"), "auto")
+        self.assertEqual(rig.state()["priority"]["mode"], "auto")
         rig.tether.push(notif(4))
-        self.assertTrue(rig.pump(lambda: rig.vrcmd_texts(), 2))
-        self.assertTrue(rig.pump(lambda: rig.state()["priority"]["frame_active"], 2))
+        rig.settle_for(0.3)
+        self.assertEqual(rig.vrcmd_texts(), [])                         # not worn: everything stays on the phone
+        self.assertFalse(rig.state()["priority"]["frame_active"])
+
+    def test_old_settings_files_still_load(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        for old, now in (("frame", "auto"), ("auto", "auto"), ("phone", "phone")):
+            path = os.path.join(d, old + ".json")
+            with open(path, "w") as f:
+                json.dump({"priority": old, "alerts": False}, f)
+            loaded = H.Settings(path)
+            self.assertEqual((loaded.get("priority"), loaded.get("alerts")), (now, False), old)
+            self.assertFalse(loaded.set("priority", now))               # nothing to change
+        self.assertTrue(H.Settings(path).set("priority", "auto"))
 
     def test_auto_treats_unknown_presence_as_frame(self):
         rig = Rig(self, worn=True)
@@ -727,6 +742,76 @@ class CallTests(unittest.TestCase):
         self.assertTrue(rig.pump(lambda: len(rig.state()["calls"]["recent"]) == 15, 2))
 
 
+class AppListTests(unittest.TestCase):
+    """The apps that can be muted: every app ever seen, kept across restarts."""
+
+    def path(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        return os.path.join(d, "apps.json")
+
+    def test_apps_seen_are_written_down_and_come_back_after_a_restart(self):
+        rig = Rig(self)
+        rig.start()
+        rig.tether.push(notif(41, app_id="com.example.zeta", app="Zeta"))
+        rig.tether.push(notif(42, app_id="com.example.alpha", app="alpha mail"))
+        self.assertTrue(rig.pump(lambda: len(rig.state()["apps"]) == 2, 2))
+        self.assertEqual([a["name"] for a in rig.state()["apps"]], ["alpha mail", "Zeta"])   # by display name, not case
+        path = os.path.join(os.path.dirname(rig.settings_path), "apps.json")
+        self.assertEqual(dict(H.AppBook(path).names), {"com.example.zeta": "Zeta", "com.example.alpha": "alpha mail"})
+        # a new start, before anything has been received: the same list
+        again = Rig(self, apps_path=path)
+        again.start()
+        self.assertEqual([a["id"] for a in again.state()["apps"]], ["com.example.alpha", "com.example.zeta"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX modes")
+    def test_the_file_is_private_and_leaves_no_temporary_files(self):
+        path = self.path()
+        book = H.AppBook(path)
+        book.note("a.b", "App B")
+        book.save()
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        self.assertEqual(os.listdir(os.path.dirname(path)), ["apps.json"])
+
+    def test_a_better_display_name_replaces_the_id_or_an_older_name(self):
+        book = H.AppBook(self.path())
+        self.assertTrue(book.note("com.x.chat", ""))                   # only the id so far
+        self.assertEqual(book.names["com.x.chat"], "com.x.chat")
+        self.assertTrue(book.note("com.x.chat", "Chat"))
+        self.assertFalse(book.note("com.x.chat", "Chat"))              # nothing new: nothing to write
+        self.assertFalse(book.note("com.x.chat", ""))                  # no name does not wipe the one we have
+        self.assertFalse(book.note("com.x.chat", "com.x.chat"))
+        self.assertTrue(book.note("com.x.chat", "Chat Pro"))
+        self.assertEqual(book.names["com.x.chat"], "Chat Pro")
+
+    def test_the_list_is_capped_and_never_forgets_a_muted_app(self):
+        book = H.AppBook(self.path())
+        book.note("muted.one", "Muted")
+        for i in range(H.AppBook.MAX + 20):
+            book.note("app.%d" % i, "App %d" % i, keep={"muted.one"})
+        self.assertEqual(len(book.names), H.AppBook.MAX)
+        self.assertIn("muted.one", book.names)
+        self.assertIn("app.%d" % (H.AppBook.MAX + 19), book.names)      # the newest stay
+        self.assertNotIn("app.0", book.names)
+        book.save()
+        self.assertEqual(len(H.AppBook(book.path).names), H.AppBook.MAX)
+
+    def test_muted_state_survives_and_a_broken_file_is_ignored(self):
+        rig = Rig(self)
+        rig.start()
+        rig.tether.push(notif(43, app_id="com.example.noisy", app="Noisy"))
+        self.assertTrue(rig.pump(lambda: rig.state()["apps"], 2))
+        rig.action(type="mute", app_id="com.example.noisy", muted=True)
+        self.assertTrue(rig.pump(lambda: rig.helper.view_state()["apps"][0]["muted"], 2))
+        path = self.path()
+        with open(path, "w") as f:
+            f.write("{not json")
+        self.assertEqual(dict(H.AppBook(path).names), {})
+        with open(path, "w") as f:
+            json.dump({"ok.app": "Fine", "": "x", "bad": 5, "list": ["x"]}, f)
+        self.assertEqual(dict(H.AppBook(path).names), {"ok.app": "Fine"})
+
+
 class SettingsTests(unittest.TestCase):
     def test_persist_and_reload(self):
         rig = Rig(self)
@@ -902,7 +987,7 @@ class SetupAndUpdateTests(unittest.TestCase):
         run = rig.spawn.of("systemd-run")[0]
         self.assertIn("--unit=earshot-update", run)
         self.assertIn("--user", run)
-        self.assertEqual(run[-2:], [rig.updater, "--if-newer"])
+        self.assertEqual(run[-4:], [rig.updater, "--if-newer", "--status-file", rig.status_file])   # it reports where the menu reads
         self.assertEqual(rig.spawn.of("systemctl")[0][:4], ["systemctl", "--user", "reset-failed", "earshot-update"])
         self.assertTrue(rig.pump(lambda: (rig.state()["update"]["status"] or {}).get("state") == "checking", 2))
         # the installer reports progress in the shared status file

@@ -157,6 +157,7 @@
   .es-choice button { border:0; border-radius:3px; background:#23262e; color:#b8bcbf; font:inherit; font-size:12px; padding:6px 8px; cursor:pointer; }
   .es-choice button.es-on { background:#1a9fff; color:#fff; }
   .es-note { font-size:11px; color:#8b929a; line-height:1.3; }
+  .es-result { font-size:14px; color:#fff; line-height:1.35; padding:4px 0; overflow-wrap:anywhere; }
   .es-bar { display:flex; align-items:center; gap:8px; padding:6px 14px; }
   .es-bar .es-grow { flex:1; font-weight:700; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .es-msgs { padding:4px 10px 8px; display:flex; flex-direction:column; gap:4px; }
@@ -264,7 +265,7 @@
     let sub = '';
     if (S.setup) sub = '';
     else if (!p.connected) sub = p.reason || 'Waiting for the iPhone.';
-    else if (!pr.frame_active) sub = 'Headset not in use: the phone handles calls and notifications.';
+    else if (!pr.frame_active) sub = 'Headset not in use: notifications stay on the phone.';
     return `<div class="es-head"><span class="es-dot${p.connected && !S.setup ? ' es-ok' : ''}"></span>` +
       `<div class="es-name">${esc(p.name || 'iPhone')}</div>` +
       (typeof p.battery === 'number' ? `<span class="es-chip">${p.battery}%</span>` : '') +
@@ -470,25 +471,47 @@
     `<div class="es-row"><span>${esc(label)}${note ? `<div class="es-note">${esc(note)}</div>` : ''}</span>` +
     `<button class="es-sw${on ? ' es-on' : ''}" data-act="setting-toggle" data-a="${key}" data-b="${on ? '0' : '1'}" aria-pressed="${on ? 'true' : 'false'}"></button></div>`;
 
+  // "Check for updates" always ends in a line that says what happened. Until the helper has answered (it writes
+  // "checking" at once), the tap itself is acknowledged here; if nothing answers, that is said too.
+  let checkTapped = 0, checkTimer = null;
+  cleanups.push(() => clearTimeout(checkTimer));
+  const UPDATE_NO_ANSWER_MS = 15000;
+  const UPDATE_FALLBACK = { uptodate: 'Up to date', updated: 'Updated', noreleases: 'No releases published yet', failed: 'Could not check', checking: 'Checking for updates...', updating: 'Updating...' };
   function updateText(u) {
     const st = u && u.status;
-    if (!st) return { busy: false, text: '' };
-    const busy = (st.state === 'checking' || st.state === 'updating') && st.time && (Date.now() / 1000 - st.time) < 900;
-    return { busy, text: busy || !(st.state === 'checking' || st.state === 'updating') ? st.message : 'The last update check did not finish. Try again.' };
+    const answered = !!(st && st.time && st.time * 1000 >= checkTapped - 2000);
+    if (checkTapped && !answered) {
+      return Date.now() - checkTapped < UPDATE_NO_ANSWER_MS
+        ? { busy: true, text: 'Checking for updates...', when: 0 }
+        : { busy: false, text: 'No answer from the Earshot service. Try again.', when: 0 };
+    }
+    if (!st) return { busy: false, text: '', when: 0 };
+    const working = st.state === 'checking' || st.state === 'updating';
+    const limit = st.state === 'checking' ? 180 : 900;
+    const busy = working && st.time && (Date.now() / 1000 - st.time) < limit;
+    if (working && !busy) return { busy: false, text: 'The last update check did not finish. Try again.', when: 0 };
+    return { busy: !!busy, text: st.message || UPDATE_FALLBACK[st.state] || 'Update status unknown', when: working ? 0 : st.time };
+  }
+  function checkForUpdates() {
+    checkTapped = Date.now();
+    act({ type: 'check_updates' });
+    clearTimeout(checkTimer);
+    checkTimer = setTimeout(() => { if (!dead) render(true); }, UPDATE_NO_ANSWER_MS + 100);
+    render(true);
   }
 
   function pageSettings() {
     const st = S.settings || {}, pr = S.priority || {}, p = S.phone || {};
-    const modes = [['auto', 'Auto'], ['frame', 'Always Frame'], ['phone', 'Always phone']];
-    let h = '<div class="es-sec"><div class="es-h">Who gets calls and notifications</div><div class="es-row es-col"><div class="es-choice">' +
-      modes.map(([k, l]) => `<button class="${st.priority === k ? 'es-on' : ''}" data-act="setting-set" data-a="priority" data-b="${k}">${l}</button>`).join('') + '</div>' +
-      `<div class="es-note">Right now: ${pr.frame_active ? 'the headset' : 'the phone'}. ` +
-      (st.priority === 'auto' ? 'Auto follows whether SteamVR is running until the headset can tell when it is worn. ' : '') +
-      'When the phone has priority, Earshot lets go of the call link so the phone rings normally.</div></div>';
-    h += '<div class="es-h">Notifications</div>' +
-      toggle('Show notifications in the headset', !!st.alerts, 'alerts', 'Pop-ups appear while the headset has priority.') +
-      toggle('Show message text in notifications', !!st.preview, 'preview', 'Off shows only who it is from.');
-    const apps = S.apps || [];
+    // One plain choice. Saved files with the old "frame" or "auto" mean the first one, "phone" the second.
+    const modes = [['auto', "While I'm wearing it"], ['phone', 'Never']];
+    const chosen = st.priority === 'phone' ? 'phone' : 'auto';
+    let h = '<div class="es-sec"><div class="es-h">Show iPhone notifications in the headset</div><div class="es-row es-col"><div class="es-choice">' +
+      modes.map(([k, l]) => `<button class="${chosen === k ? 'es-on' : ''}" data-act="setting-set" data-a="priority" data-b="${k}">${esc(l)}</button>`).join('') + '</div>' +
+      '<div class="es-note">When you take the headset off, everything stays on your phone as usual.</div></div>';
+    h += '<div class="es-h">Pop-ups</div>' +
+      toggle('Pop-ups for new notifications', !!st.alerts, 'alerts', 'Off keeps them in the Notifications list only.') +
+      toggle('Show message text in pop-ups', !!st.preview, 'preview', 'Off shows only who it is from.');
+    const apps = [...(S.apps || [])].sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }) || String(a.id).localeCompare(String(b.id)));
     h += '<div class="es-h">Mute apps</div>';
     h += apps.length ? apps.map((a) => `<div class="es-row"><span>${esc(a.name)}</span><button class="es-sw${a.muted ? ' es-on' : ''}" data-act="mute" data-a="${esc(a.id)}" data-b="${a.muted ? '0' : '1'}" aria-label="Mute ${esc(a.name)}" aria-pressed="${a.muted ? 'true' : 'false'}"></button></div>`).join('') +
       '<div class="es-note">On means no pop-up. The app still shows under Notifications.</div>'
@@ -508,7 +531,7 @@
     const versions = (S.update && S.update.versions) || {};
     h += '<div class="es-h">Updates</div>' + toggle('Update automatically', st.auto_update !== false, 'auto_update', 'Checks for a new Earshot every few hours and installs it.') +
       `<div class="es-row es-col"><div class="es-choice"><button data-act="check-updates"${u.busy ? ' disabled' : ''}>${u.busy ? esc(u.text) : 'Check for updates'}</button></div>` +
-      (u.text && !u.busy ? `<div class="es-note">${esc(u.text)}</div>` : '') + '</div>' +
+      (u.text && !u.busy ? `<div class="es-result">${esc(u.text)}${u.when ? ` <span class="es-note">${esc(whenText(u.when))}</span>` : ''}</div>` : '') + '</div>' +
       (Object.keys(versions).length ? `<div class="es-note" style="margin-top:8px">Installed: ${Object.keys(versions).map((k) => esc(k) + ' ' + esc(versions[k])).join(', ')}</div>` : '');
     return h + '</div>';
   }
@@ -846,7 +869,7 @@
       case 'setting-set': act({ type: 'set_setting', key: a, value: b }); break;
       case 'setting-toggle': act({ type: 'set_setting', key: a, value: b === '1' }); break;
       case 'mute': act({ type: 'mute', app_id: a, muted: b === '1' }); break;
-      case 'check-updates': act({ type: 'check_updates' }); break;
+      case 'check-updates': checkForUpdates(); break;
       case 'pair-start': act({ type: 'pair_start' }); break;
       case 'pair-search': act({ type: 'pair_search' }); break;
       case 'pair-pick': act({ type: 'pair_pick', address: a }); break;

@@ -44,9 +44,9 @@ Use upstream's `tether-<version>-aarch64.AppImage` (needs glibc 2.38 or newer).
 8. Reboot the Frame and check the iPhone reconnects by itself. After the next SteamOS update, check again.
 
 9. **Must verify (Earshot helper, hands-free hand-back).** With the helper running, take
-   the headset off (or set Priority to "Always phone") and ring the phone from another phone:
+   the headset off (or set "Show iPhone notifications in the headset" to Never) and ring the phone from another phone:
    the phone must ring normally and `busctl --system introspect org.bluez <device path>`
-   must show no `telephony0` object. Put the headset on again (or set "Always Frame"). The
+   must show no `telephony0` object. Put the headset on again (or set it back to "While I'm wearing it"). The
    helper restores hands-free by dropping the BR/EDR bearer
    (`org.bluez.Bearer.BREDR1 Disconnect`), because `ConnectProfile` returns success and does
    nothing. Check that Phone tab, Settings shows "Calls: reconnecting..." and then "connected"
@@ -98,8 +98,9 @@ layout). Stop the upstream Tether test daemon from test 2 first. Then:
    appears); close and reopen the menu: the draft is still there; a quick reply sends in
    one tap; the reply arrives on the other phone; the tab shows "sent".
 7. A call: notification plus the Answer/Decline card; Decline ends it on the phone.
-8. Settings: switch Priority to "Always phone": no notifications in the headset, calls
-   stay on the phone. Back to Auto.
+8. Settings: set "Show iPhone notifications in the headset" to Never: no pop-ups in the headset.
+   Back to "While I'm wearing it". Check for updates always ends in a line of text
+   ("No releases published yet" until the first release exists).
 9. `top`: idle CPU and memory of `tetherd` and `earshot-steamui.py` against the budget in
    PLAN.md.
 10. `Uninstall-Earshot.desktop` (or `uninstall.sh`): the tab goes, `~/.local/share/earshot`

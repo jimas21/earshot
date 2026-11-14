@@ -475,6 +475,117 @@ class FlowTests(unittest.TestCase):
                 self._run()
 
 
+    # --- what the Phone tab's "Check for updates" shows: always a result, in plain words ---
+
+    def _main(self, *argv):
+        with mock.patch("sys.stdout", new=io.StringIO()), mock.patch("sys.stderr", new=io.StringIO()):
+            rc = ei.main(["--if-newer", "--status-file", self.status_path] + list(argv))
+        return rc, self._status()
+
+    def test_up_to_date_names_the_version(self):
+        with mock.patch.object(ei, "run_install_sh", lambda: None):
+            self._run()
+            rc, st = self._main()
+        self.assertEqual((rc, st["state"]), (0, "uptodate"))
+        self.assertEqual(st["message"], "Up to date (version v1.2.0)")
+
+    def test_a_newer_release_says_so_before_it_updates(self):
+        with mock.patch.object(ei, "run_install_sh", lambda: None):
+            self._run()
+            self.publish("v1.3.0")
+            seen = []
+            real = ei.Status.set
+
+            def spy(status, state, message):
+                seen.append((state, message))
+                real(status, state, message)
+
+            with mock.patch.object(ei, "latest_tag", lambda c: "v1.3.0"), mock.patch.object(ei.Status, "set", spy):
+                rc, st = self._main()
+        self.assertEqual(rc, 0)
+        self.assertIn(("updating", "Update available: v1.3.0 - updating..."), seen)
+        self.assertEqual(st["state"], "updated")
+
+    def test_no_release_published_yet_is_a_clear_result_not_an_error(self):
+        def none(c):
+            raise ei.NoReleases("nothing published")
+
+        with mock.patch.object(ei, "latest_tag", none):
+            rc, st = self._main()
+        self.assertEqual(rc, 0)
+        self.assertEqual((st["state"], st["message"]), ("noreleases", "No releases published yet"))
+        with mock.patch.object(ei, "latest_tag", none):          # a first install by hand has nothing to install: that is an error exit
+            with mock.patch("sys.stdout", new=io.StringIO()), mock.patch("sys.stderr", new=io.StringIO()):
+                self.assertEqual(ei.main(["--status-file", self.status_path]), 1)
+        self.assertEqual(self._status()["state"], "noreleases")
+
+    def test_a_failed_lookup_says_why(self):
+        def broken(c):
+            raise ei.CheckFailed("could not check x", "Temporary failure in name resolution")
+
+        with mock.patch.object(ei, "latest_tag", broken):
+            rc, st = self._main()
+        self.assertEqual(rc, 1)
+        self.assertEqual((st["state"], st["message"]), ("failed", "Could not check (Temporary failure in name resolution)"))
+
+
+class LatestTagTests(unittest.TestCase):
+    """latest_tag() turns GitHub's answers into a tag, "no releases yet", or a short reason."""
+
+    COMPONENT = {"repo": "example/earshot"}
+
+    def _open(self, result):
+        class Resp:
+            def __init__(self, url):
+                self.url = url
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def geturl(self):
+                return self.url
+
+        def fake(req, timeout=None):
+            if isinstance(result, Exception):
+                raise result
+            return Resp(result)
+
+        return mock.patch.object(ei.urllib.request, "urlopen", fake)
+
+    def test_the_tag_comes_from_the_redirect(self):
+        with self._open("https://github.com/example/earshot/releases/tag/v1.2.0"):
+            self.assertEqual(ei.latest_tag(self.COMPONENT), "v1.2.0")
+
+    def test_404_means_nothing_is_published_yet(self):
+        err = ei.urllib.error.HTTPError("https://github.com/x", 404, "Not Found", {}, io.BytesIO(b""))
+        with self._open(err):
+            with self.assertRaises(ei.NoReleases):
+                ei.latest_tag(self.COMPONENT)
+
+    def test_a_redirect_without_a_tag_means_the_same(self):
+        with self._open("https://github.com/example/earshot/releases"):
+            with self.assertRaises(ei.NoReleases):
+                ei.latest_tag(self.COMPONENT)
+
+    def test_other_http_errors_and_network_errors_carry_a_short_reason(self):
+        err = ei.urllib.error.HTTPError("https://github.com/x", 503, "Unavailable", {}, io.BytesIO(b""))
+        with self._open(err):
+            with self.assertRaises(ei.CheckFailed) as caught:
+                ei.latest_tag(self.COMPONENT)
+        self.assertEqual(caught.exception.reason, "GitHub answered 503")
+        with self._open(ei.urllib.error.URLError("Temporary failure in name resolution")):
+            with self.assertRaises(ei.CheckFailed) as caught:
+                ei.latest_tag(self.COMPONENT)
+        self.assertEqual(caught.exception.reason, "Temporary failure in name resolution")
+        with self._open(TimeoutError("timed out")):
+            with self.assertRaises(ei.CheckFailed) as caught:
+                ei.latest_tag(self.COMPONENT)
+        self.assertEqual(caught.exception.reason, "timed out")
+
+
 class StatusTests(unittest.TestCase):
     def test_status_file_and_final_only(self):
         with tempfile.TemporaryDirectory() as d:

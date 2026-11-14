@@ -35,6 +35,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 # The .desktop launchers replace the excepthook so a failed download prints one plain line.
@@ -180,6 +181,18 @@ class InstallError(Exception):
     pass
 
 
+class NoReleases(InstallError):
+    """The repository has not published a release yet (not an error for an update check)."""
+
+
+class CheckFailed(InstallError):
+    """The latest release could not be looked up; `reason` is short and fit to show a person."""
+
+    def __init__(self, message, reason):
+        super().__init__(message)
+        self.reason = reason
+
+
 def version_of(tag):
     """A release tag without a leading v: v0.3.5 -> 0.3.5."""
     return tag[1:] if tag[:1] in ("v", "V") and tag[1:2].isdigit() else tag
@@ -287,12 +300,19 @@ def latest_tag(component):
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             final = resp.geturl()
+    except urllib.error.HTTPError as e:
+        if e.code == 404:  # GitHub answers 404 for /releases/latest while nothing is published
+            raise NoReleases(f"{component['repo']} has not published a release yet") from None
+        raise CheckFailed(f"could not check {url}: {e}", f"GitHub answered {e.code}") from None
     except (OSError, http.client.HTTPException) as e:
-        raise InstallError(f"could not check {url}: {e}; check the connection and try again") from None
+        reason = str(getattr(e, "reason", None) or e).strip() or type(e).__name__
+        raise CheckFailed(f"could not check {url}: {e}; check the connection and try again", reason[:80]) from None
     marker = "/releases/tag/"
-    tag = final.split(marker, 1)[1] if marker in final else ""
+    if marker not in final:
+        raise NoReleases(f"{component['repo']} has no latest release")
+    tag = final.split(marker, 1)[1]
     if not tag or len(tag) > 64 or not set(tag) <= _TAG_OK:
-        raise InstallError(f"could not find the latest release of {component['repo']}")
+        raise CheckFailed(f"could not find the latest release of {component['repo']}", "unexpected release name")
     return tag
 
 
@@ -349,9 +369,9 @@ def components_to_update(installed, tag, if_newer):
 
 class Status:
     """Progress for the Phone tab (its helper reads the file): a JSON object with
-    state (checking, updating, uptodate, updated, failed), message and time."""
+    state (checking, updating, uptodate, updated, noreleases, failed), message and time."""
 
-    FINAL = ("uptodate", "updated", "failed")
+    FINAL = ("uptodate", "updated", "noreleases", "failed")
 
     def __init__(self, path, final_only=False):
         self.path = path
@@ -480,9 +500,9 @@ def install(args, status):
         todo = components_to_update(installed, tag, args.if_newer)
         if not todo:
             print("Earshot is up to date.")
-            status.set("uptodate", "Up to date")
+            status.set("uptodate", f"Up to date (version {tag})")
             return
-        status.set("updating", "Updating...")
+        status.set("updating", f"Update available: {tag} - updating...")
         stage_parent = args.download_only or DATA_DIR
         os.makedirs(stage_parent, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".stage-", dir=stage_parent) as work:
@@ -591,6 +611,14 @@ def main(argv=None):
             uninstall(args)
         else:
             install(args, status)
+    except NoReleases as e:
+        print(f"\n{e}", file=sys.stderr)
+        status.set("noreleases", "No releases published yet")
+        return 0 if args.if_newer else 1  # a check that finds nothing is fine; a first install has nothing to install
+    except CheckFailed as e:
+        print(f"\nerror: {e}", file=sys.stderr)
+        status.set("failed", f"Could not check ({e.reason})")
+        return 1
     except (InstallError, OSError, tarfile.TarError) as e:
         print(f"\nerror: {e}", file=sys.stderr)
         status.set("failed", f"Update failed: {e}")

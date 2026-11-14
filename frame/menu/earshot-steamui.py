@@ -116,6 +116,13 @@ SETTING_SPECS = {
     "presence_worn_values": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v) and len(v) <= 10,
     "quick_replies": lambda v: isinstance(v, list) and len(v) <= 8 and all(isinstance(x, str) and 0 < len(x.strip()) <= 120 for x in v),
 }
+SETTING_NORMALISE = {"priority": {"frame": "auto"}}   # old value -> what it means now
+
+
+def normalised(key, value):
+    return SETTING_NORMALISE.get(key, {}).get(value, value) if isinstance(value, str) else value
+
+
 SETTING_DEFAULTS = {
     "priority": "auto",
     "alerts": True,
@@ -149,7 +156,7 @@ class Settings:
             return
         for key, ok in SETTING_SPECS.items():
             if key in data and ok(data[key]):
-                self.values[key] = data[key]
+                self.values[key] = normalised(key, data[key])
 
     def get(self, key):
         return self.values[key]
@@ -159,6 +166,7 @@ class Settings:
         ok = SETTING_SPECS.get(key)
         if ok is None or not ok(value):
             return False
+        value = normalised(key, value)
         if self.values[key] == value:
             return False
         self.values[key] = json.loads(json.dumps(value))
@@ -184,6 +192,75 @@ class Settings:
                 raise
         except OSError as error:
             log.warning("could not save settings (%s)", type(error).__name__)
+
+
+class AppBook:
+    """Every app that has ever sent a notification (id -> display name), kept beside the settings so the list of
+    apps that can be muted does not change from one start to the next. 0600, written atomically, small."""
+
+    MAX = 200
+
+    def __init__(self, path):
+        self.path = path
+        self.names = collections.OrderedDict()   # oldest first
+        self.load()
+
+    def load(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.loads(f.read(256 * 1024))
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError) as error:
+            log.warning("app list unreadable (%s); starting empty", type(error).__name__)
+            return
+        if not isinstance(data, dict):
+            return
+        for app_id, name in data.items():
+            if isinstance(app_id, str) and 0 < len(app_id) <= 200 and isinstance(name, str):
+                self.names[app_id] = trim(name, 50) or app_id
+        while len(self.names) > self.MAX:
+            self.names.popitem(last=False)
+
+    def note(self, app_id, name, keep=()):
+        """Remember an app. A display name that arrives later replaces the id (or an older name). Returns True when
+        something changed. When the list is full the oldest apps that are not muted (`keep`) are forgotten."""
+        name = trim(name, 50) if name else ""
+        have = self.names.get(app_id)
+        if have is None:
+            self.names[app_id] = name or app_id
+        elif name and name != app_id and name != have:
+            self.names[app_id] = name
+        else:
+            return False
+        self.names.move_to_end(app_id)
+        for old in [k for k in self.names if k not in keep and k != app_id]:
+            if len(self.names) <= self.MAX:
+                break
+            del self.names[old]
+        while len(self.names) > self.MAX:
+            self.names.popitem(last=False)
+        return True
+
+    def save(self):
+        directory = os.path.dirname(self.path)
+        try:
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=".apps.", dir=directory)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(self.names, f, indent=1)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, self.path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        except OSError as error:
+            log.warning("could not save the app list (%s)", type(error).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -1811,7 +1888,7 @@ class Helper:
     def __init__(self, loop=None, settings=None, connect_tether=connect_unix, executor=None,
                  menu_file=MENU_FILE, cdp_base=CDP_BASE, http_get=http_get_json, ws_factory=WsClient,
                  vrcmd=VRCMD, notifier=None, updater=UPDATER, status_file=UPDATE_STATUS_FILE, versions_file=VERSIONS_FILE,
-                 settings_path=None, scan=scan_processes, burst_window=8.0, push_delay=0.15,
+                 settings_path=None, apps_path=None, scan=scan_processes, burst_window=8.0, push_delay=0.15,
                  tether_backoff=(1.0, 30.0), presence_every=10.0, send_timeout=45.0,
                  settle_seconds=5.0, auto_update_first=AUTO_UPDATE_FIRST, clock=None, exists=os.path.exists):
         self.loop = loop or Loop(clock or time.monotonic)
@@ -1842,7 +1919,8 @@ class Helper:
         self.devices_seen = False
         self.notifications = collections.OrderedDict()   # uid -> dict, oldest first
         self.cleared = set()
-        self.known_apps = {}                             # app_id -> name
+        self.apps = AppBook(apps_path or os.path.join(os.path.dirname(self.settings.path), "apps.json"))
+        self.known_apps = self.apps.names                # app_id -> name, every app ever seen
         self.threads = []
         self.messages = {}                               # thread -> list
         self.open_thread = None
@@ -2161,7 +2239,8 @@ class Helper:
     def note_app(self, n):
         app_id = n.get("app_id")
         if isinstance(app_id, str) and app_id:
-            self.known_apps[app_id] = n.get("app_name") or self.known_apps.get(app_id) or app_id
+            if self.apps.note(app_id, n.get("app_name"), keep=set(self.settings.get("muted_apps"))):
+                self.apps.save()
 
     def mark_read(self, thread, messages=None):
         pending = []
@@ -2205,12 +2284,9 @@ class Helper:
             self.dirty()
 
     def frame_active(self):
-        mode = self.settings.get("priority")
-        if mode == "frame":
-            return True
-        if mode == "phone":
+        if self.settings.get("priority") == "phone":      # "Never"
             return False
-        return self.worn is not False  # unknown counts as worn: Auto = Frame while SteamVR runs
+        return self.worn is not False  # "While I'm wearing it"; unknown counts as worn (SteamVR running stands in for it)
 
     def phone_device(self):
         address = self.bt_status.get("device_address")
@@ -2623,7 +2699,7 @@ class Helper:
         def run():
             self.exec.run(["systemd-run", "--user", "--quiet", "--collect", "--unit=" + UPDATE_UNIT,
                            "--property=UnsetEnvironment=LD_LIBRARY_PATH LD_PRELOAD",
-                           python, "-I", self.updater, "--if-newer"], started, timeout=20)
+                           python, "-I", self.updater, "--if-newer", "--status-file", self.status_file], started, timeout=20)
 
         self.exec.run(["systemctl", "--user", "reset-failed", UPDATE_UNIT], lambda *_: run(), timeout=10)
 
@@ -2707,7 +2783,7 @@ class Helper:
         apps = {i: n for i, n in self.known_apps.items() if i != MAP_APP_ID}
         for i in muted:
             apps.setdefault(i, i)
-        return [{"id": i, "name": trim(n, 50), "muted": i in muted} for i, n in sorted(apps.items(), key=lambda kv: kv[1].lower())][:100]
+        return [{"id": i, "name": trim(n, 50), "muted": i in muted} for i, n in sorted(apps.items(), key=lambda kv: (kv[1].lower(), kv[0]))][:AppBook.MAX]
 
     def view_state(self):
         shown = [n for uid, n in self.notifications.items() if uid not in self.cleared][::-1]

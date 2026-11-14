@@ -390,7 +390,7 @@ test('not set up yet: says what is wrong in plain words, never a command, keeps 
   click(p, byAct(p, 'retry'));
   assert.deepEqual(p.last(), { type: 'retry' });
   click(p, byAct(p, 'tab', 'settings'));
-  assert.match(text(p), /Who gets calls and notifications/);
+  assert.match(text(p), /Show iPhone notifications in the headset/);
 });
 
 test('settings send their actions', () => {
@@ -699,4 +699,98 @@ test('teardown stops watching the strip', async () => {
   addTab(p, 'magicpods-tab');
   await tick();
   assert.deepEqual(stripIds(p), ['t1', 't2', 'magicpods-tab']);
+});
+
+// ---------- settings: one plain priority choice, a steady app list, an update check that always answers ----------
+const settingsText = (p) => p.doc.getElementById('earshot-body').textContent;
+const openSettings = (state) => {
+  const p = openPopup();
+  p.w.__earshotMenu.setState(state || BASE);
+  click(p, byAct(p, 'tab', 'settings'));
+  return p;
+};
+const choices = (p) => [...p.doc.querySelectorAll('[data-act="setting-set"][data-a="priority"]')];
+
+test('priority: "While I\'m wearing it" or "Never", one short line, no talk of calls or modes', () => {
+  const p = openSettings();
+  assert.match(settingsText(p), /Show iPhone notifications in the headset/);
+  assert.deepEqual(choices(p).map((b) => b.textContent), ["While I'm wearing it", 'Never']);
+  assert.deepEqual(choices(p).map((b) => b.classList.contains('es-on')), [true, false]);     // the default
+  assert.match(settingsText(p), /When you take the headset off, everything stays on your phone as usual\./);
+  assert.doesNotMatch(settingsText(p), /Always|Right now|SteamVR|Auto follows|call link|rings/);
+  click(p, choices(p)[1]);
+  assert.deepEqual(p.last(), { type: 'set_setting', key: 'priority', value: 'phone' });
+  click(p, choices(p)[0]);
+  assert.deepEqual(p.last(), { type: 'set_setting', key: 'priority', value: 'auto' });
+});
+
+test('priority: what old settings files held is shown as what it means now', () => {
+  for (const [old, wearing] of [['frame', true], ['auto', true], ['phone', false]]) {
+    const s = withState({});
+    s.settings.priority = old;
+    const p = openSettings(s);
+    assert.deepEqual(choices(p).map((b) => b.classList.contains('es-on')), [wearing, !wearing], old);
+  }
+});
+
+test('mute list: alphabetical by display name, the same however the helper sends them, muted state shown', () => {
+  const s = withState({});
+  s.apps = [
+    { id: 'z.last', name: 'Zeta', muted: false }, { id: 'a.mail', name: 'alpha mail', muted: true },
+    { id: 'm.chat', name: 'Chat', muted: false }, { id: 'b.same', name: 'Chat', muted: false },
+  ];
+  const p = openSettings(s);
+  const rows = [...p.doc.querySelectorAll('[data-act="mute"]')];
+  assert.deepEqual(rows.map((b) => b.getAttribute('data-a')), ['a.mail', 'b.same', 'm.chat', 'z.last']);
+  assert.deepEqual(rows.map((b) => b.classList.contains('es-on')), [true, false, false, false]);
+  click(p, rows[0]);
+  assert.deepEqual(p.last(), { type: 'mute', app_id: 'a.mail', muted: false });
+});
+
+function updatePage(status) {
+  const s = withState({});
+  s.update.status = status;
+  return openSettings(s);
+}
+const resultLine = (p) => (p.doc.querySelector('.es-result') || {}).textContent;
+const nowS = () => Math.floor(Date.now() / 1000);
+
+test('update check: every outcome is a plain line on the page', () => {
+  assert.equal(resultLine(updatePage({ state: 'uptodate', message: 'Up to date (version v1.2.0)', time: nowS() })).startsWith('Up to date (version v1.2.0)'), true);
+  assert.match(resultLine(updatePage({ state: 'noreleases', message: 'No releases published yet', time: nowS() })), /^No releases published yet/);
+  assert.match(resultLine(updatePage({ state: 'failed', message: 'Could not check (timed out)', time: nowS() })), /^Could not check \(timed out\)/);
+  assert.match(resultLine(updatePage({ state: 'updated', message: 'Updated to v1.3.0', time: nowS() })), /^Updated to v1\.3\.0/);
+  // a state with no message still says something
+  assert.match(resultLine(updatePage({ state: 'noreleases', message: '', time: nowS() })), /No releases published yet/);
+  assert.match(resultLine(updatePage({ state: 'failed', message: '', time: nowS() })), /Could not check/);
+  // while it works the button carries the words, and the update that is being installed is named
+  const p = updatePage({ state: 'updating', message: 'Update available: v1.3.0 - updating...', time: nowS() });
+  assert.equal(byAct(p, 'check-updates').disabled, true);
+  assert.match(byAct(p, 'check-updates').textContent, /Update available: v1\.3\.0 - updating/);
+  // one that never finished is not left looking busy forever
+  const stuck = updatePage({ state: 'checking', message: 'Checking for updates...', time: nowS() - 400 });
+  assert.equal(byAct(stuck, 'check-updates').disabled, false);
+  assert.match(resultLine(stuck), /did not finish/);
+});
+
+test('update check: the tap is acknowledged at once, then the answer replaces it; no answer is said too', () => {
+  const p = updatePage({ state: 'noreleases', message: 'No releases published yet', time: nowS() - 100 });
+  const realNow = p.w.Date.now;
+  click(p, byAct(p, 'check-updates'));
+  assert.deepEqual(p.last(), { type: 'check_updates' });
+  assert.equal(byAct(p, 'check-updates').disabled, true);                         // not "nothing happened"
+  assert.match(byAct(p, 'check-updates').textContent, /Checking for updates/);
+  assert.equal(resultLine(p), undefined);                                        // the old result is not shown as if it were new
+  // the helper answers
+  const s = withState({}); s.update.status = { state: 'noreleases', message: 'No releases published yet', time: nowS() + 1 };
+  p.w.__earshotMenu.setState(s);
+  assert.equal(byAct(p, 'check-updates').disabled, false);
+  assert.match(resultLine(p), /^No releases published yet/);
+  // a second tap that nothing answers
+  click(p, byAct(p, 'check-updates'));
+  p.w.Date.now = () => realNow.call(p.w.Date) + 20000;
+  const t = withState({}); t.update.status = Object.assign({}, s.update.status, { time: nowS() - 100 });
+  p.w.__earshotMenu.setState(t);
+  assert.match(resultLine(p), /No answer from the Earshot service/);
+  assert.equal(byAct(p, 'check-updates').disabled, false);
 });

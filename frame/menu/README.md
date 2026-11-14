@@ -46,12 +46,16 @@ helper as the user unit `earshot-steamui.service`.
   switches as the engine reports them. The state lives in the helper, so it survives
   closing the tab or Steam reloading its pages. Settings has Pair a different iPhone and
   Forget this iPhone.
-- **Priority.** Settings has Auto, Always Frame and Always phone. When the phone has
-  priority the helper stops raising alerts and asks BlueZ to let go of the Hands-Free link
+- **Priority.** Settings has one choice, "Show iPhone notifications in the headset": While
+  I'm wearing it (the default) or Never (the settings key stays `priority`; `auto` and
+  `phone`, and an old `frame` now means `auto`). When the phone has
+  priority the helper stops raising pop-ups and asks BlueZ to let go of the Hands-Free link
   (`Device1.DisconnectProfile` through `busctl`), so the phone rings normally; it asks for
-  the link back when the headset has priority again. Auto currently follows whether
+  the link back when the headset has priority again. Worn currently means
   SteamVR is running. A better "worn" signal can be added behind `PresenceDetector`.
 - **Settings** are kept in `~/.config/earshot/settings.json` (private, written atomically).
+  Every app that ever sent a notification is remembered in `apps.json` beside it (up to 200,
+  names updated when a better one arrives), so the Mute list is the same after a restart.
 - **Updates.** Settings has Check for updates and Update automatically (first check ten
   minutes after start, then every six hours). The helper starts
   `~/.local/share/earshot/earshot-frame-install.py --if-newer` in its own user unit,
