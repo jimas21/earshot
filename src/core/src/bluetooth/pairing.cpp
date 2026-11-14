@@ -667,14 +667,6 @@ namespace tether::bluetooth {
             result.dual_bond = device.has_le_bearer && device.le_bonded;
             result.message = display_name + " is already paired.";
         } else {
-            auto cap = monitor.capability();
-            if (!cap.class_ok) {
-                notify(progress,
-                       "warning",
-                       "Adapter class is not A/V Hands-Free; the iPhone may not offer its permissions. "
-                       "Run scripts/bt-probe.sh --set-class.");
-            }
-
             // Silence any advert left over from an earlier pairing before
             // authentication starts.
             stop_advert(monitor);

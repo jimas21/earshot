@@ -726,11 +726,9 @@ namespace tether::bluetooth {
             }
             cap.reasons.emplace_back(std::move(reason));
         }
-        if (!cap.class_ok && no_root) {
-            cap.reasons.emplace_back(_("This adapter does not present itself as A/V Hands-Free. Changing that needs "
-                                       "administrator rights, so it is left alone. If the iPhone does not offer "
-                                       "Messages or Contacts, that is why."));
-        } else if (!cap.class_ok) {
+        // Without root the class is left alone and not reported: iOS offers Messages and Contacts to an adapter
+        // with the normal class of device too, so it is no reason for either to be missing.
+        if (!cap.class_ok && !no_root) {
             cap.setup.push_back({_("The iPhone will not offer its Messages and Contacts permissions until this "
                                    "adapter presents itself as A/V Hands-Free (major 4, minor 8)."),
                                  set_class_command(cap.adapter_id, systemd_booted())});
