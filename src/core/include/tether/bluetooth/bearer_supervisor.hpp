@@ -85,6 +85,9 @@ namespace tether::bluetooth {
         virtual bool telephony_present() const = 0;
         // Drops the BR/EDR bearer on its own, leaving LE up. Never Device1.Disconnect().
         virtual bool disconnect_classic(std::string& err) = 0;
+        // Whether disconnect_classic can work at all: it needs Bearer.BREDR1, which a BlueZ run
+        // without --experimental does not export.
+        virtual bool can_cycle_classic() const { return true; }
     };
 
     struct BearerStatus {
@@ -120,6 +123,12 @@ namespace tether::bluetooth {
         return ready || bearer.le_connected || (bearer.classic_connected && !bearer.le_available) ||
                now - le_down_since < ANCS_BEARER_GRACE_SECONDS;
     }
+
+    // Whether the supervisor dials BR/EDR itself with Device1.Connect(). A user-level engine with calls off (no
+    // root, no obexd) needs no Classic profile at all, and the headset offers none, so BlueZ refuses the dial
+    // (br-connection-profile-unavailable) every time. The iPhone reconnects on its own; the supervisor keeps
+    // watching. Everywhere else, and whenever calls are on, the dial is the supervisor's job as before.
+    inline bool should_dial_classic(bool no_root, bool calls_enabled) { return !no_root || calls_enabled; }
 
     // Whether the phone has been gone long enough, and for the right reason, to
     // lock the session.
@@ -158,12 +167,15 @@ namespace tether::bluetooth {
 
         void set_ancs_enabled(bool enabled);
         void set_calls_enabled(bool enabled);
+        // TETHER_NO_ROOT: see should_dial_classic().
+        void set_no_root(bool no_root);
         const BearerStatus& status() const { return status_; }
 
     private:
         BearerOps& ops_;
         bool ancs_enabled_ = true;
         bool calls_enabled_ = false;
+        bool no_root_ = false;
 
         BearerStatus status_;
         int classic_failures_ = 0;

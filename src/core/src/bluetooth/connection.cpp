@@ -456,6 +456,8 @@ namespace tether::bluetooth {
                 return device && monitor_.snapshot().find_telephony(device->path) != nullptr;
             }
 
+            bool can_cycle_classic() const override { return !no_bearer_api(); }
+
             bool disconnect_classic(std::string& err) override {
                 auto device = lookup();
                 if (!device) {
@@ -1526,6 +1528,7 @@ namespace tether::bluetooth {
         });
         state_->profile_ops = std::make_unique<ObexProfileOps>(address);
         state_->bearers = std::make_unique<BearerSupervisor>(*state_->bearer_ops, ancs_effective);
+        state_->bearers->set_no_root(no_root_mode());
         state_->profiles = std::make_unique<ProfileSupervisor>(*state_->profile_ops);
 
         // Only built when the caller can actually show notifications and the

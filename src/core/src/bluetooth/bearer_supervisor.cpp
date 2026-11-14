@@ -101,6 +101,8 @@ namespace tether::bluetooth {
 
     void BearerSupervisor::set_calls_enabled(bool enabled) { calls_enabled_ = enabled; }
 
+    void BearerSupervisor::set_no_root(bool no_root) { no_root_ = no_root; }
+
     void BearerSupervisor::reset() {
         // hfp_cycle_spent_ deliberately survives
         classic_failures_ = 0;
@@ -167,7 +169,14 @@ namespace tether::bluetooth {
 
             const int ceiling = status_.le_connected ? LE_UP_CLASSIC_BACKOFF_MAX_SECONDS : BEARER_BACKOFF_MAX_SECONDS;
 
-            if (now >= next_classic_attempt_) {
+            const bool dial = should_dial_classic(no_root_, calls_enabled_);
+            if (!dial) {
+                // Nothing here needs a Classic profile: the iPhone reconnects by itself, so there is no
+                // backoff to grow and no failure to count.
+                status_.classic_backoff = 0;
+                next_classic_attempt_ = 0;
+                classic_failures_ = 0;
+            } else if (now >= next_classic_attempt_) {
                 std::string err;
                 switch (classify(ops_.connect_classic(err), err)) {
                 case ConnectResult::Requested:
@@ -193,6 +202,12 @@ namespace tether::bluetooth {
 
             status_.le_dialling = ops_.le_connect_outstanding();
 
+            if (!dial) {
+                status_.reason = status_.le_connected ? _("Notifications are connected.")
+                                                      : _("Waiting for the iPhone to reconnect over Bluetooth...");
+                return !(status_ == previous);
+            }
+
             // An iPhone that keeps refusing while unlocked, with its Bluetooth
             // permissions already on, is wedged on its own side: nothing here
             // clears it, and saying "connecting" forever hides that. A host with
@@ -214,7 +229,7 @@ namespace tether::bluetooth {
         }
 
         // Classic is up.
-        if (calls_enabled_ && !ops_.telephony_present()) {
+        if (calls_enabled_ && ops_.can_cycle_classic() && !ops_.telephony_present()) {
             if (telephony_absent_since_ < 0)
                 telephony_absent_since_ = now;
             if (!hfp_cycle_spent_ && now - telephony_absent_since_ >= HFP_ABSENT_SECONDS) {

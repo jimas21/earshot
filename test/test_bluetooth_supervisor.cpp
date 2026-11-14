@@ -80,6 +80,9 @@ namespace {
 
         bool telephony_present() const override { return telephony; }
 
+        bool cycle_possible = true;
+        bool can_cycle_classic() const override { return cycle_possible; }
+
         bool disconnect_classic(std::string&) override {
             ++classic_disconnects;
             classic = false;
@@ -1146,6 +1149,75 @@ TEST(BearerSupervisor, NeverCyclesClassicWhenCallsAreDisabled) {
 TEST(BearerSupervisor, NeverCyclesClassicWhileHandsFreeIsPresent) {
     FakeBearer ops;
     ops.telephony = true;
+    BearerSupervisor sup(ops, true);
+    sup.set_calls_enabled(true);
+
+    for (int64_t now = 0; now <= 4 * HFP_ABSENT_SECONDS; ++now)
+        sup.tick(now);
+    EXPECT_EQ(ops.classic_disconnects, 0);
+}
+
+// No root, calls off: the engine needs no Classic profile, so the supervisor never dials Device1.Connect() (which
+// the headset, offering no profile, can only refuse) and never grows a backoff or counts failures against it.
+TEST(BearerSupervisor, NoRootWithCallsOffNeverDialsClassic) {
+    FakeBearer ops;
+    ops.classic_succeeds = false;
+    ops.classic_error = "br-connection-profile-unavailable";
+    BearerSupervisor sup(ops, true);
+    sup.set_no_root(true);
+
+    for (int64_t now = 0; now <= 120; ++now)
+        sup.tick(now);
+    EXPECT_EQ(ops.classic_attempts, 0);
+    EXPECT_EQ(sup.status().classic_backoff, 0);
+    EXPECT_FALSE(sup.status().classic_connected);
+    EXPECT_NE(sup.status().reason.find("reconnect"), std::string::npos) << sup.status().reason;
+
+    // The iPhone reconnecting by itself is picked up as usual.
+    ops.classic = true;
+    sup.tick(121);
+    EXPECT_TRUE(sup.status().classic_connected);
+}
+
+TEST(BearerSupervisor, NoRootWithCallsOffReportsLeUpAsConnected) {
+    FakeBearer ops;
+    ops.le = true;
+    BearerSupervisor sup(ops, true);
+    sup.set_no_root(true);
+
+    for (int64_t now = 0; now <= 120; ++now)
+        sup.tick(now);
+    EXPECT_EQ(ops.classic_attempts, 0);
+    EXPECT_TRUE(sup.status().le_connected);
+    EXPECT_EQ(sup.status().reason, "Notifications are connected.");
+}
+
+// With calls on the supervisor dials as before, and outside no-root mode calls make no difference.
+TEST(BearerSupervisor, NoRootWithCallsOnStillDialsClassic) {
+    FakeBearer ops;
+    BearerSupervisor sup(ops, true);
+    sup.set_no_root(true);
+    sup.set_calls_enabled(true);
+    sup.tick(0);
+    EXPECT_EQ(ops.classic_attempts, 1);
+}
+
+TEST(BearerSupervisor, UpstreamModeDialsClassicWhateverCallsSay) {
+    FakeBearer ops;
+    BearerSupervisor sup(ops, true);
+    sup.tick(0);
+    EXPECT_EQ(ops.classic_attempts, 1);
+    EXPECT_TRUE(should_dial_classic(false, false));
+    EXPECT_TRUE(should_dial_classic(false, true));
+    EXPECT_TRUE(should_dial_classic(true, true));
+    EXPECT_FALSE(should_dial_classic(true, false));
+}
+
+// Without the bearer API the cycle cannot work, so it is not attempted even with calls on.
+TEST(BearerSupervisor, NeverCyclesClassicWhereTheBearerApiIsMissing) {
+    FakeBearer ops;
+    ops.telephony = false;
+    ops.cycle_possible = false;
     BearerSupervisor sup(ops, true);
     sup.set_calls_enabled(true);
 
