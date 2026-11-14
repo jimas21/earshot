@@ -20,6 +20,7 @@ marker="$data/created-cef-flag"
 systemctl --user disable --now earshot-steamui.service earshot-tetherd.service earshot-obexd.service 2>/dev/null
 rm -f "$units/earshot-tetherd.service" "$units/earshot-obexd.service" "$units/earshot-steamui.service"
 systemctl --user daemon-reload 2>/dev/null
+systemctl --user reset-failed earshot-steamui.service earshot-tetherd.service earshot-obexd.service 2>/dev/null || true
 
 # Take the Phone tab out of Steam's open pages (the stopped helper can no longer do it).
 if [ -f "$data/frame/earshot-steamui.py" ]; then
