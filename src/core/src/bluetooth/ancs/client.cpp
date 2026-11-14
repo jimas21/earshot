@@ -1,4 +1,5 @@
 #include "tether/bluetooth/ancs/client.hpp"
+#include "tether/bluetooth/ancs/hold.hpp"
 #include "tether/bluetooth/ancs/sequencer.hpp"
 #include "tether/bluetooth/bmessage.hpp"
 #include "tether/bluetooth/monitor.hpp"
@@ -8,7 +9,9 @@
 #include <ctime>
 #include <deque>
 #include <gio/gio.h>
+#include <map>
 #include <mutex>
+#include <set>
 
 namespace tether::bluetooth::ancs {
 
@@ -77,6 +80,12 @@ namespace tether::bluetooth::ancs {
         // request already in flight, so an app is asked about once per session.
         std::map<std::string, std::string> app_names;
 
+        // Apps with a GetAppAttributes request outstanding, and the notifications waiting on them. Tick thread only.
+        std::set<std::string> app_lookups;
+        HeldNotifications held;
+        // The monotonic second of the tick in progress; holds are timed against it.
+        int64_t tick_now = 0;
+
         bool write_control_point(const std::vector<uint8_t>& payload);
         void set_status(bool now_ready, const std::string& text);
         bool discover();
@@ -90,7 +99,11 @@ namespace tether::bluetooth::ancs {
         void wait_for_link();
         void handle_source_event(const SourceEvent& event, int64_t now);
         void handle_response(const Request& request, const Response& response, int64_t now);
-        std::string app_display_name(const std::string& app_id);
+        void deliver(Notification notification);
+        void deliver_all(std::vector<Notification> notifications);
+        void lookup_finished(const std::string& app_id, const std::string& name);
+        void release_expired_holds(int64_t now);
+        void flush_held();
     };
 
     namespace {
@@ -420,6 +433,7 @@ namespace tether::bluetooth::ancs {
             set_status(false, "Waiting for the iPhone's notification service.");
             sequencer->reset();
             in_progress.clear();
+            flush_held();
         } else {
             rebuild(link_gone ? "LE link gone" : "BlueZ cleared Notifying");
         }
@@ -433,6 +447,7 @@ namespace tether::bluetooth::ancs {
         set_status(false, "Subscribing to the iPhone's notifications...");
         sequencer->reset();
         in_progress.clear();
+        flush_held();
         // Buffered packets carry the old session's UIDs.
         std::lock_guard<std::mutex> lock(inbox);
         pending_source.clear();
@@ -467,6 +482,7 @@ namespace tether::bluetooth::ancs {
             drop_gatt_paths();
             sequencer->reset();
             in_progress.clear();
+            flush_held();
             next_probe = 0;
             next_verify = 0;
             std::lock_guard<std::mutex> lock(inbox);
@@ -502,8 +518,10 @@ namespace tether::bluetooth::ancs {
         case Decision::Ignore:
             return;
         case Decision::Withdraw:
-            // A fetch still queued or in flight must not bring it back.
+            // A fetch still queued or in flight must not bring it back, nor a notification still waiting for its
+            // app's name: it was never shown, so there is nothing to take down for it, but it must not appear now.
             in_progress.erase(event.uid);
+            held.cancel(event.uid);
             if (on_withdraw)
                 on_withdraw(event.uid);
             return;
@@ -531,15 +549,53 @@ namespace tether::bluetooth::ancs {
             in_progress.erase(event.uid);
     }
 
-    // Never blocks on the phone: the derived name is used now and the real one
-    // backfills the registry when GetAppAttributes answers.
-    std::string AncsClientState::app_display_name(const std::string& app_id) {
-        if (app_id.empty())
-            return {};
-        auto [entry, inserted] = app_names.try_emplace(app_id);
-        if (inserted)
-            sequencer->submit(build_app_request(app_id));
-        return entry->second.empty() ? derive_app_name(app_id) : entry->second;
+    // Stores a resolved notification and hands it on.
+    void AncsClientState::deliver(Notification notification) {
+        {
+            std::lock_guard<std::mutex> lock(registry_mutex);
+            registry.store(notification);
+        }
+        if (!notification.pre_existing)
+            debug::log(INFO, "ancs: notification {} fetched from {}", notification.uid, notification.app_id);
+        if (on_notification)
+            on_notification(notification);
+    }
+
+    void AncsClientState::deliver_all(std::vector<Notification> notifications) {
+        for (auto& notification : notifications)
+            deliver(std::move(notification));
+    }
+
+    // The lookup for `app_id` is over, answered with `name` or, when it is empty, not answered at all.
+    void AncsClientState::lookup_finished(const std::string& app_id, const std::string& name) {
+        app_lookups.erase(app_id);
+        if (!name.empty())
+            app_names[app_id] = name;
+        deliver_all(held.release(app_id, name));
+    }
+
+    // A notification must not wait for a name for ever: past the wait it goes out under the derived one.
+    void AncsClientState::release_expired_holds(int64_t now) {
+        if (held.size() == 0)
+            return;
+        std::vector<std::string> apps;
+        auto expired = held.release_expired(now, &apps);
+        for (const auto& app_id : apps) {
+            // Stop waiting on the answer too, so the next notification of the app is not held behind it. A late
+            // answer still renames what is stored.
+            app_lookups.erase(app_id);
+        }
+        if (!expired.empty())
+            debug::log(INFO, "ancs: no app name in {}s, showing {} notification(s) under the derived name",
+                       APP_NAME_WAIT_SECONDS,
+                       expired.size());
+        deliver_all(std::move(expired));
+    }
+
+    // The session is ending: nothing held may be lost with it.
+    void AncsClientState::flush_held() {
+        app_lookups.clear();
+        deliver_all(held.release_all());
     }
 
     void AncsClientState::handle_response(const Request& request, const Response& response, int64_t now) {
@@ -550,13 +606,15 @@ namespace tether::bluetooth::ancs {
                 set_status(true, "Notification mirroring is active.");
 
             const std::string name = response.attribute(static_cast<uint8_t>(AppAttributeId::DisplayName));
-            if (!response.app_id.empty() && !name.empty()) {
-                app_names[response.app_id] = name;
-                // The name arrives after the notifications that triggered the
-                // lookup were already stored and broadcast.
+            const std::string& app_id = response.app_id.empty() ? request.app_id : response.app_id;
+            if (!app_id.empty() && !name.empty()) {
+                // A name that arrives after its notifications went out under the derived one (a late answer) still
+                // corrects what is stored.
                 std::lock_guard<std::mutex> lock(registry_mutex);
-                registry.rename_app(response.app_id, name);
+                registry.rename_app(app_id, name);
             }
+            if (!app_id.empty())
+                lookup_finished(app_id, name);
             return;
         }
         if (response.command != CommandId::GetNotificationAttributes)
@@ -577,7 +635,6 @@ namespace tether::bluetooth::ancs {
         Notification notification;
         notification.uid = request.uid;
         notification.app_id = response.attribute(static_cast<uint8_t>(NotificationAttributeId::AppIdentifier));
-        notification.app_name = app_display_name(notification.app_id);
         notification.title = response.attribute(static_cast<uint8_t>(NotificationAttributeId::Title));
         notification.subtitle = response.attribute(static_cast<uint8_t>(NotificationAttributeId::Subtitle));
         notification.body = response.attribute(static_cast<uint8_t>(NotificationAttributeId::Message));
@@ -591,14 +648,28 @@ namespace tether::bluetooth::ancs {
             parse_map_timestamp(response.attribute(static_cast<uint8_t>(NotificationAttributeId::Date)));
         notification.received = delivered ? delivered : now;
 
-        {
-            std::lock_guard<std::mutex> lock(registry_mutex);
-            registry.store(notification);
+        // The app's real name is wanted before this is shown. It is known, being fetched, or neither: ask once per
+        // session, and while the answer is on its way hold the notification rather than show the derived guess.
+        const std::string& app_id = notification.app_id;
+        bool name_known = false;
+        if (!app_id.empty()) {
+            auto [entry, first_time] = app_names.try_emplace(app_id);
+            if (first_time && sequencer->submit(build_app_request(app_id)))
+                app_lookups.insert(app_id);
+            name_known = !entry->second.empty();
+            if (name_known)
+                notification.app_name = entry->second;
         }
-        if (!notification.pre_existing)
-            debug::log(INFO, "ancs: notification {} fetched from {}", notification.uid, notification.app_id);
-        if (on_notification)
-            on_notification(notification);
+        if (!name_known)
+            notification.app_name = derive_app_name(app_id);
+
+        // An app with notifications already waiting keeps them ahead of this one.
+        const bool pending = app_lookups.count(app_id) > 0 || held.holding(app_id);
+        if (name_action(app_id.empty(), name_known, pending) == NameAction::Hold) {
+            held.hold(std::move(notification), tick_now);
+            return;
+        }
+        deliver(std::move(notification));
     }
 
     AncsClient::AncsClient(BluezMonitor& monitor,
@@ -619,6 +690,9 @@ namespace tether::bluetooth::ancs {
             },
             [raw](const Request& request, const std::string& reason) {
                 raw->in_progress.erase(request.uid);
+                // No name is coming: what waited for it goes out under the derived one.
+                if (request.command == CommandId::GetAppAttributes && !request.app_id.empty())
+                    raw->lookup_finished(request.app_id, {});
                 debug::log(WARN, "ancs: request for notification {} failed: {}", request.uid, reason);
             });
     }
@@ -642,6 +716,7 @@ namespace tether::bluetooth::ancs {
             state_->last_known_device = device_path;
 
         state_->unsubscribe();
+        state_->flush_held();
         state_->device_path = device_path;
         state_->subscribed = false;
         state_->waiting_for_link = false;
@@ -719,6 +794,8 @@ namespace tether::bluetooth::ancs {
         if (s->device_path.empty())
             return;
 
+        s->tick_now = now;
+        s->release_expired_holds(now);
         if (!s->link_usable()) {
             s->wait_for_link();
             return;

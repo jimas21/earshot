@@ -142,6 +142,7 @@ namespace tether::bluetooth::ancs {
     Request build_app_request(const std::string& app_id) {
         Request request;
         request.command = CommandId::GetAppAttributes;
+        request.app_id = app_id;
 
         request.payload.push_back(static_cast<uint8_t>(CommandId::GetAppAttributes));
         request.payload.insert(request.payload.end(), app_id.begin(), app_id.end());

@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <tether/bluetooth/ancs/client.hpp>
+#include <tether/bluetooth/ancs/hold.hpp>
 #include <tether/bluetooth/ancs/notifications.hpp>
 #include <tether/bluetooth/config.hpp>
 
@@ -262,4 +263,103 @@ TEST(AncsLink, WithTheBearerApiTheBearerDecides) {
 TEST(AncsLink, WithoutTheBearerApiServicesResolvedIsTheOnlySign) {
     EXPECT_TRUE(ancs_link_usable(false, false, true));
     EXPECT_FALSE(ancs_link_usable(false, false, false)) << "BlueZ clears ServicesResolved when the link drops";
+}
+
+// A notification waits for its app's real display name instead of showing the one guessed from the bundle id.
+TEST(AncsNameHold, WaitsOnlyWhileALookupIsOutstanding) {
+    EXPECT_EQ(name_action(false, false, true), NameAction::Hold);
+    EXPECT_EQ(name_action(false, false, false), NameAction::Emit) << "no lookup in flight: nothing to wait for";
+    EXPECT_EQ(name_action(false, true, true), NameAction::Emit) << "the name is known";
+    EXPECT_EQ(name_action(false, true, false), NameAction::Emit);
+    EXPECT_EQ(name_action(true, false, true), NameAction::Emit) << "no app id, no name to wait for";
+}
+
+TEST(AncsNameHold, ReleasesAnAppsNotificationsInOrderUnderTheRealName) {
+    HeldNotifications held;
+    held.hold(make(1, "com.security.BatteryCam"), 10);
+    held.hold(make(2, "com.other.App"), 10);
+    held.hold(make(3, "com.security.BatteryCam"), 11);
+    EXPECT_TRUE(held.holding("com.security.BatteryCam"));
+
+    const auto released = held.release("com.security.BatteryCam", "Anker eufy");
+    ASSERT_EQ(released.size(), 2u);
+    EXPECT_EQ(released[0].uid, 1u);
+    EXPECT_EQ(released[1].uid, 3u);
+    EXPECT_EQ(released[0].app_name, "Anker eufy");
+    EXPECT_EQ(released[1].app_name, "Anker eufy");
+    EXPECT_FALSE(held.holding("com.security.BatteryCam"));
+    EXPECT_TRUE(held.holding("com.other.App")) << "another app's notification is not released with it";
+    EXPECT_EQ(held.size(), 1u);
+}
+
+TEST(AncsNameHold, AnAnswerWithNoNameReleasesUnderTheDerivedOne) {
+    HeldNotifications held;
+    held.hold(make(1, "com.security.BatteryCam"), 0);
+    const auto released = held.release("com.security.BatteryCam", {});
+    ASSERT_EQ(released.size(), 1u);
+    EXPECT_EQ(released[0].app_name, derive_app_name("com.security.BatteryCam"));
+}
+
+TEST(AncsNameHold, GivesUpAfterTheWaitAndNeverDropsAnything) {
+    HeldNotifications held;
+    held.hold(make(1, "com.a.A"), 100);
+    held.hold(make(2, "com.b.B"), 102);
+    held.hold(make(3, "com.a.A"), 102);
+
+    std::vector<std::string> apps;
+    EXPECT_TRUE(held.release_expired(100 + APP_NAME_WAIT_SECONDS - 1, &apps).empty());
+    EXPECT_TRUE(apps.empty());
+
+    // The oldest of app A is due, so all of A goes, in order, and B (younger) stays.
+    const auto expired = held.release_expired(100 + APP_NAME_WAIT_SECONDS, &apps);
+    ASSERT_EQ(expired.size(), 2u);
+    EXPECT_EQ(expired[0].uid, 1u);
+    EXPECT_EQ(expired[1].uid, 3u);
+    EXPECT_EQ(expired[0].app_name, derive_app_name("com.a.A"));
+    ASSERT_EQ(apps.size(), 1u);
+    EXPECT_EQ(apps[0], "com.a.A");
+    EXPECT_EQ(held.size(), 1u);
+
+    const auto rest = held.release_expired(102 + APP_NAME_WAIT_SECONDS);
+    ASSERT_EQ(rest.size(), 1u);
+    EXPECT_EQ(rest[0].uid, 2u);
+    EXPECT_EQ(held.size(), 0u);
+}
+
+TEST(AncsNameHold, ARemovalCancelsAHeldNotification) {
+    HeldNotifications held;
+    held.hold(make(1, "com.a.A"), 0);
+    held.hold(make(2, "com.a.A"), 0);
+    EXPECT_TRUE(held.cancel(1));
+    EXPECT_FALSE(held.cancel(1));
+    EXPECT_FALSE(held.cancel(99));
+    const auto released = held.release("com.a.A", "A");
+    ASSERT_EQ(released.size(), 1u);
+    EXPECT_EQ(released[0].uid, 2u);
+}
+
+TEST(AncsNameHold, AnUpdateKeepsThePlaceOfTheNotificationItUpdates) {
+    HeldNotifications held;
+    held.hold(make(1, "com.a.A"), 0);
+    held.hold(make(2, "com.a.A"), 0);
+    Notification updated = make(1, "com.a.A");
+    updated.body = "newer text";
+    held.hold(updated, 5);
+
+    const auto released = held.release("com.a.A", "A");
+    ASSERT_EQ(released.size(), 2u);
+    EXPECT_EQ(released[0].uid, 1u);
+    EXPECT_EQ(released[0].body, "newer text");
+    EXPECT_EQ(released[1].uid, 2u);
+}
+
+TEST(AncsNameHold, EndingASessionLosesNothing) {
+    HeldNotifications held;
+    held.hold(make(1, "com.a.A"), 0);
+    held.hold(make(2, "com.b.B"), 0);
+    const auto all = held.release_all();
+    ASSERT_EQ(all.size(), 2u);
+    EXPECT_EQ(all[0].app_name, derive_app_name("com.a.A"));
+    EXPECT_EQ(all[1].app_name, derive_app_name("com.b.B"));
+    EXPECT_EQ(held.size(), 0u);
 }

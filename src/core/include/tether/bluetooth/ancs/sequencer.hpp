@@ -28,6 +28,8 @@ namespace tether::bluetooth::ancs {
         // Echoed back to the caller so a completion can be matched to what it
         // was for without ANCS providing any correlation of its own.
         uint32_t uid = 0;
+        // For a GetAppAttributes request, the app it asks about.
+        std::string app_id;
     };
 
     // Serializes Control Point requests.
