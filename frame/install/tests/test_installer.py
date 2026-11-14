@@ -151,19 +151,20 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(ei.asset_name(frame, "v0.1.0"), "earshot-frame-0.1.0.tar.gz")
 
     def test_earshot_tag_family(self):
-        self.assertEqual(ei.version_of("earshot-v0.1.0"), "0.1.0")
-        self.assertEqual(ei.version_of("earshot-v0.1.0-rc.1"), "0.1.0-rc.1")
+        self.assertEqual(ei.version_of("e0.1.0"), "0.1.0")
+        self.assertEqual(ei.version_of("e0.1.0-rc.1"), "0.1.0-rc.1")
+        self.assertEqual(ei.version_of("earnest"), "earnest")
         engine, frame = ei.COMPONENTS
-        for tag in ("earshot-v0.1.0", "v0.1.0"):
+        for tag in ("e0.1.0", "v0.1.0"):
             self.assertEqual(ei.asset_name(engine, tag), "earshot-engine-0.1.0-aarch64.tar.gz")
             self.assertEqual(ei.asset_name(frame, tag), "earshot-frame-0.1.0.tar.gz")
-        self.assertEqual(ei.version_key("earshot-v0.1.0"), ei.version_key("v0.1.0"))
-        self.assertGreater(ei.version_key("earshot-v0.2.0"), ei.version_key("earshot-v0.1.9"))
-        self.assertLess(ei.version_key("earshot-v0.2.0-rc.1"), ei.version_key("earshot-v0.2.0"))
-        old = {"engine": "earshot-v0.1.0", "frame": "earshot-v0.1.0"}
-        self.assertEqual(ei.components_to_update(old, "earshot-v0.1.0", if_newer=True), [])
-        self.assertEqual(len(ei.components_to_update(old, "earshot-v0.1.1", if_newer=True)), 2)
-        self.assertEqual(ei.components_to_update(old, "earshot-v0.0.9", if_newer=True), [])
+        self.assertEqual(ei.version_key("e0.1.0"), ei.version_key("v0.1.0"))
+        self.assertGreater(ei.version_key("e0.2.0"), ei.version_key("e0.1.9"))
+        self.assertLess(ei.version_key("e0.2.0-rc.1"), ei.version_key("e0.2.0"))
+        old = {"engine": "e0.1.0", "frame": "e0.1.0"}
+        self.assertEqual(ei.components_to_update(old, "e0.1.0", if_newer=True), [])
+        self.assertEqual(len(ei.components_to_update(old, "e0.1.1", if_newer=True)), 2)
+        self.assertEqual(ei.components_to_update(old, "e0.0.9", if_newer=True), [])
 
     def test_components_to_update(self):
         keys = lambda todo: [c["key"] for c in todo]

@@ -374,11 +374,11 @@ class DocsAndCiTests(unittest.TestCase):
 
     def test_releases_use_the_earshot_tag_family_and_ship_the_tether_version(self):
         wf = self.text(".github", "workflows", "earshot-arm64.yml")
-        self.assertIn("- 'earshot-v*'", wf)
+        self.assertIn("- 'e[0-9]*'", wf)
         self.assertNotIn("- 'v*'", wf)
-        self.assertIn('${GITHUB_REF_NAME#earshot-v}', wf)
+        self.assertIn('${GITHUB_REF_NAME#e}', wf)
         self.assertIn('"${d}/TETHER_VERSION"', wf)
-        self.assertIn('--title "Earshot ${VER} (Tether ${TETHER_VER})"', wf)
+        self.assertIn('--title "Earshot ${VER}"', wf)
 
     def test_both_tarballs_carry_the_version_the_installer_checks(self):
         wf = self.text(".github", "workflows", "earshot-arm64.yml")

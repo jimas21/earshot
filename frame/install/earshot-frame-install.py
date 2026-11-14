@@ -53,7 +53,7 @@ REPO = "jimas21/earshot"
 # key is held by the maintainer and never committed. See .github/workflows/earshot-arm64.yml.
 PUBKEY = "tzXaDplSb7PN763T4PnKQv3Elih4XplDsCl523lMK8s="
 
-# Assets are named after the release tag with "earshot-" and any leading "v" dropped: {ver}.
+# Assets are named after the release tag with a leading "e" or "v" dropped: {ver}.
 COMPONENTS = [
     {
         "key": "engine",
@@ -193,14 +193,10 @@ class CheckFailed(InstallError):
         self.reason = reason
 
 
-TAG_PREFIX = "earshot-"  # Earshot's own tag family (earshot-v0.1.0), beside Tether's inherited v* tags
-
-
 def version_of(tag):
-    """A release tag without its prefix: earshot-v0.1.0 -> 0.1.0, v0.3.5 -> 0.3.5."""
-    if tag.startswith(TAG_PREFIX):
-        tag = tag[len(TAG_PREFIX):]
-    return tag[1:] if tag[:1] in ("v", "V") and tag[1:2].isdigit() else tag
+    """A release tag without its prefix: Earshot's own tags are e0.1.0 (beside Tether's inherited v* tags);
+    a plain v0.3.5 works too. e0.1.0 -> 0.1.0, v0.3.5 -> 0.3.5."""
+    return tag[1:] if tag[:1] in ("e", "E", "v", "V") and tag[1:2].isdigit() else tag
 
 
 def asset_name(component, tag):
