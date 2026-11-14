@@ -238,11 +238,11 @@
   function headHtml() {
     if (!S) return '<div class="es-head"><div class="es-name">Phone</div></div>';
     const p = S.phone || {}, pr = S.priority || {};
-    const where = pr.frame_active ? 'Alerts here' : 'Alerts on phone';
+    const where = pr.frame_active ? 'Notifications here' : 'Notifications on phone';
     let sub = '';
     if (S.setup) sub = '';
     else if (!p.connected) sub = p.reason || 'Waiting for the iPhone.';
-    else if (!pr.frame_active) sub = 'Headset not in use: the phone handles calls and alerts.';
+    else if (!pr.frame_active) sub = 'Headset not in use: the phone handles calls and notifications.';
     return `<div class="es-head"><span class="es-dot${p.connected && !S.setup ? ' es-ok' : ''}"></span>` +
       `<div class="es-name">${esc(p.name || 'iPhone')}</div>` +
       (typeof p.battery === 'number' ? `<span class="es-chip">${p.battery}%</span>` : '') +
@@ -267,7 +267,7 @@
     const unread = S ? (S.unread || 0) : 0;
     const ringing = S && S.calls && S.calls.incoming ? 1 : 0;
     const notifs = S ? unreadAlerts() : 0;
-    const tabs = [['calls', 'Calls', ringing], ['alerts', 'Alerts', notifs], ['messages', 'Messages', unread], ['settings', 'Settings', 0]];
+    const tabs = [['calls', 'Calls', ringing], ['messages', 'Messages', unread], ['alerts', 'Notifications', notifs], ['settings', 'Settings', 0]];
     return tabs.map(([k, label, n]) => `<button class="${ui.tab === k ? 'es-on' : ''}" data-act="tab" data-a="${k}">${label}${badge(n)}</button>`).join('');
   }
 
@@ -376,18 +376,18 @@
   function pageSettings() {
     const st = S.settings || {}, pr = S.priority || {}, p = S.phone || {};
     const modes = [['auto', 'Auto'], ['frame', 'Always Frame'], ['phone', 'Always phone']];
-    let h = '<div class="es-sec"><div class="es-h">Who gets calls and alerts</div><div class="es-row es-col"><div class="es-choice">' +
+    let h = '<div class="es-sec"><div class="es-h">Who gets calls and notifications</div><div class="es-row es-col"><div class="es-choice">' +
       modes.map(([k, l]) => `<button class="${st.priority === k ? 'es-on' : ''}" data-act="setting-set" data-a="priority" data-b="${k}">${l}</button>`).join('') + '</div>' +
       `<div class="es-note">Right now: ${pr.frame_active ? 'the headset' : 'the phone'}. ` +
       (st.priority === 'auto' ? 'Auto follows whether SteamVR is running until the headset can tell when it is worn. ' : '') +
       'When the phone has priority, Earshot lets go of the call link so the phone rings normally.</div></div>';
-    h += '<div class="es-h">Alerts</div>' +
-      toggle('Show alerts in the headset', !!st.alerts, 'alerts', 'Pop-ups appear while the headset has priority.') +
-      toggle('Show message text in alerts', !!st.preview, 'preview', 'Off shows only who it is from.');
+    h += '<div class="es-h">Notifications</div>' +
+      toggle('Show notifications in the headset', !!st.alerts, 'alerts', 'Pop-ups appear while the headset has priority.') +
+      toggle('Show message text in notifications', !!st.preview, 'preview', 'Off shows only who it is from.');
     const apps = S.apps || [];
     h += '<div class="es-h">Mute apps</div>';
     h += apps.length ? apps.map((a) => `<div class="es-row"><span>${esc(a.name)}</span><button class="es-sw${a.muted ? ' es-on' : ''}" data-act="mute" data-a="${esc(a.id)}" data-b="${a.muted ? '0' : '1'}" aria-label="Mute ${esc(a.name)}" aria-pressed="${a.muted ? 'true' : 'false'}"></button></div>`).join('') +
-      '<div class="es-note">On means no pop-up. The app still shows under Alerts.</div>'
+      '<div class="es-note">On means no pop-up. The app still shows under Notifications.</div>'
       : '<div class="es-note">Apps that send notifications will be listed here.</div>';
     const bt = S.bluetooth || {};
     h += '<div class="es-h">Bluetooth</div><div class="es-note" style="font-size:12px;line-height:1.7">' +
@@ -573,7 +573,7 @@
     if (!b) { b = document.createElement('span'); b.className = 'es-badge es-tabbadge'; tab.appendChild(b); }
     const t = n > 99 ? '99+' : String(n);
     if (b.textContent !== t) b.textContent = t;
-    tab.setAttribute('aria-label', 'Phone, ' + n + ' new alert' + (n === 1 ? '' : 's'));
+    tab.setAttribute('aria-label', 'Phone, ' + n + ' new notification' + (n === 1 ? '' : 's'));
   }
 
   function ensurePopup() {

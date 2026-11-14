@@ -83,7 +83,7 @@ test('renders the calls tab with recent calls', () => {
   const t = text(p);
   assert.match(t, /Test Phone/);
   assert.match(t, /80%/);
-  assert.match(t, /Alerts here/);
+  assert.match(t, /Notifications here/);
   assert.match(t, /Pat Example/);
   assert.match(t, /Missed/);
 });
@@ -221,7 +221,7 @@ test('not set up yet: says what is wrong in plain words, never a command, keeps 
   click(p, byAct(p, 'retry'));
   assert.deepEqual(p.last(), { type: 'retry' });
   click(p, byAct(p, 'tab', 'settings'));
-  assert.match(text(p), /Who gets calls and alerts/);
+  assert.match(text(p), /Who gets calls and notifications/);
 });
 
 test('settings send their actions', () => {
@@ -362,14 +362,14 @@ test('bar click asks the popup to open and falls back to clicking Headset Batter
 const tabBadge = (p) => p.doc.querySelector('#earshot-qam-tab .es-tabbadge');
 const newAlert = (uid, app = 'Chat', title = 'Ping') => ({ uid, app_id: 'com.example.' + app.toLowerCase(), app, title, text: '', timestamp: 2000 + uid, category: 0, can_dismiss: true, can_accept: false });
 
-test('a new alert puts a count on the Phone tab button, and opening Alerts clears it', () => {
+test('a new alert puts a count on the Phone tab button, and opening Notifications clears it', () => {
   const p = openPopup();
   p.w.__earshotMenu.setState(BASE);                       // first state is the baseline: what the phone already had is not new
   assert.equal(tabBadge(p), null);
   p.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8), newAlert(9)] }));
   assert.equal(tabBadge(p).textContent, '2');
-  assert.match(p.doc.getElementById('earshot-qam-tab').getAttribute('aria-label'), /2 new alerts/);
-  assert.match(byAct(p, 'tab', 'alerts').textContent, /2/);   // the Alerts tab inside the menu counts them too
+  assert.match(p.doc.getElementById('earshot-qam-tab').getAttribute('aria-label'), /2 new notifications/);
+  assert.match(byAct(p, 'tab', 'alerts').textContent, /2/);   // the Notifications tab inside the menu counts them too
   click(p, byAct(p, 'tab', 'alerts'));
   assert.equal(tabBadge(p), null);
   assert.equal(p.doc.getElementById('earshot-qam-tab').getAttribute('aria-label'), 'Phone');
@@ -383,7 +383,7 @@ test('the Phone tab count also shows while the quick menu is on another of Steam
   assert.ok(!p.doc.getElementById('earshot-overlay').classList.contains('es-open'));
   p.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8)] }));
   assert.equal(tabBadge(p).textContent, '1');
-  assert.match(p.doc.getElementById('earshot-qam-tab').getAttribute('aria-label'), /1 new alert\b/);
+  assert.match(p.doc.getElementById('earshot-qam-tab').getAttribute('aria-label'), /1 new notification\b/);
 });
 
 test('alerts list: new ones are highlighted while the tab stays open, and are not new on the next visit', () => {
@@ -406,7 +406,7 @@ test('alerts list: new ones are highlighted while the tab stays open, and are no
   assert.deepEqual(items().map((i) => i.classList.contains('es-new')), [false, false, false]);
 });
 
-test('alerts that arrive while another tab is open stay unread until Alerts is opened', () => {
+test('alerts that arrive while another tab is open stay unread until Notifications is opened', () => {
   const p = openPopup();
   p.w.__earshotMenu.setState(BASE);
   click(p, byAct(p, 'tab', 'messages'));

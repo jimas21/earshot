@@ -22,10 +22,10 @@ helper as the user unit `earshot-steamui.service`.
   come back through a `Runtime.addBinding` binding named `earshotAction`. Nothing listens
   on any port. Everything it adds is prefixed `earshot-`, so it can sit next to the Tragus
   menu in the same pages.
-- **Alerts.** While the headset has priority, new phone notifications, texts and incoming
+- **Notifications.** While the headset has priority, new phone notifications, texts and incoming
   calls become SteamVR notifications (`vrcmd --notify`). A burst from one app or one
   conversation is shown once, then summarised ("3 new messages from ..."). Apps can be
-  muted in Settings; muted apps still appear under Alerts.
+  muted in Settings; muted apps still appear under Notifications.
 - **Calls.** An incoming call puts an Answer / Decline card on top of the Phone tab and a
   "Call" mark on the bar. Answer and Decline use the call commands when Hands-Free is up
   and the iPhone's notification actions otherwise.
