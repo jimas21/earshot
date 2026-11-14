@@ -357,3 +357,99 @@ test('bar click asks the popup to open and falls back to clicking Headset Batter
   click(p, p.doc.getElementById('earshot-bar-indicator'));
   assert.equal(opened, 1);
 });
+
+// ---------- unread alerts ----------
+const tabBadge = (p) => p.doc.querySelector('#earshot-qam-tab .es-tabbadge');
+const newAlert = (uid, app = 'Chat', title = 'Ping') => ({ uid, app_id: 'com.example.' + app.toLowerCase(), app, title, text: '', timestamp: 2000 + uid, category: 0, can_dismiss: true, can_accept: false });
+
+test('a new alert puts a count on the Phone tab button, and opening Alerts clears it', () => {
+  const p = openPopup();
+  p.w.__earshotMenu.setState(BASE);                       // first state is the baseline: what the phone already had is not new
+  assert.equal(tabBadge(p), null);
+  p.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8), newAlert(9)] }));
+  assert.equal(tabBadge(p).textContent, '2');
+  assert.match(p.doc.getElementById('earshot-qam-tab').getAttribute('aria-label'), /2 new alerts/);
+  assert.match(byAct(p, 'tab', 'alerts').textContent, /2/);   // the Alerts tab inside the menu counts them too
+  click(p, byAct(p, 'tab', 'alerts'));
+  assert.equal(tabBadge(p), null);
+  assert.equal(p.doc.getElementById('earshot-qam-tab').getAttribute('aria-label'), 'Phone');
+  assert.doesNotMatch(byAct(p, 'tab', 'alerts').textContent, /\d/);
+});
+
+test('the Phone tab count also shows while the quick menu is on another of Steam\'s tabs', () => {
+  const p = openPopup();
+  p.w.__earshotMenu.setState(BASE);
+  click(p, p.doc.getElementById('t1'));                    // leave the Phone tab: the overlay closes
+  assert.ok(!p.doc.getElementById('earshot-overlay').classList.contains('es-open'));
+  p.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8)] }));
+  assert.equal(tabBadge(p).textContent, '1');
+  assert.match(p.doc.getElementById('earshot-qam-tab').getAttribute('aria-label'), /1 new alert\b/);
+});
+
+test('alerts list: new ones are highlighted while the tab stays open, and are not new on the next visit', () => {
+  const p = openPopup();
+  p.w.__earshotMenu.setState(BASE);
+  p.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8, 'Mail', 'Receipt')] }));
+  click(p, byAct(p, 'tab', 'alerts'));
+  const items = () => [...p.doc.querySelectorAll('#earshot-body .es-item')];
+  assert.equal(items().length, 2);
+  assert.deepEqual(items().map((i) => i.classList.contains('es-new')), [false, true]);
+  assert.match(items()[1].textContent, /New/);
+  assert.doesNotMatch(items()[0].textContent, /New/);
+  // a state push while the person is looking keeps the highlight, and one more arrival joins it
+  p.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8, 'Mail', 'Receipt'), newAlert(9)] }));
+  assert.deepEqual(items().map((i) => i.classList.contains('es-new')), [false, true, true]);
+  assert.equal(tabBadge(p), null);
+  // leave and come back: all of it has been seen
+  click(p, byAct(p, 'tab', 'calls'));
+  click(p, byAct(p, 'tab', 'alerts'));
+  assert.deepEqual(items().map((i) => i.classList.contains('es-new')), [false, false, false]);
+});
+
+test('alerts that arrive while another tab is open stay unread until Alerts is opened', () => {
+  const p = openPopup();
+  p.w.__earshotMenu.setState(BASE);
+  click(p, byAct(p, 'tab', 'messages'));
+  p.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8)] }));
+  assert.equal(tabBadge(p).textContent, '1');
+  click(p, byAct(p, 'tab', 'alerts'));
+  assert.equal(tabBadge(p), null);
+});
+
+test('what was seen survives a reload; the very first state is not announced as new', () => {
+  const first = openPopup();
+  first.w.__earshotMenu.setState(BASE);
+  first.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8)] }));
+  assert.equal(tabBadge(first).textContent, '1');
+  click(first, byAct(first, 'tab', 'alerts'));
+  const stored = first.w.localStorage.getItem('earshot.seen');
+  assert.ok(stored);
+  // a new page of the same browser profile (same storage) with the same alerts: nothing is unread
+  const again = page('popup', POPUP_HTML);
+  again.w.localStorage.setItem('earshot.seen', stored);
+  inject(again);
+  click(again, again.doc.getElementById('earshot-qam-tab'));
+  again.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8)] }));
+  assert.equal(tabBadge(again), null);
+  // ...but an alert that came in meanwhile is
+  again.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8), newAlert(10)] }));
+  assert.equal(tabBadge(again).textContent, '1');
+});
+
+test('unavailable browser storage does not break the unread count', () => {
+  const p = openPopup();
+  Object.defineProperty(p.w, 'localStorage', { get() { throw new Error('denied'); } });
+  p.w.__earshotMenu.setState(BASE);
+  p.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8)] }));
+  assert.equal(tabBadge(p).textContent, '1');
+  click(p, byAct(p, 'tab', 'alerts'));
+  assert.equal(tabBadge(p), null);
+});
+
+test('teardown removes the Phone tab count with the tab', () => {
+  const p = openPopup();
+  p.w.__earshotMenu.setState(BASE);
+  p.w.__earshotMenu.setState(withState({ notifications: [BASE.notifications[0], newAlert(8)] }));
+  p.w.__earshotMenu.teardown();
+  assert.equal(p.doc.querySelector('.es-tabbadge'), null);
+});

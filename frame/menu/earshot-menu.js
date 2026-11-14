@@ -99,6 +99,9 @@
   .es-tabs button { position:relative; flex:1; height:30px; border:0; border-radius:3px; background:#23262e; color:#b8bcbf; font:inherit; font-size:12px; cursor:pointer; }
   .es-tabs button.es-on { background:#1a9fff; color:#fff; }
   .es-badge { display:inline-block; min-width:16px; padding:0 4px; margin-left:4px; border-radius:8px; background:#ED18BF; color:#fff; font-size:10px; line-height:16px; }
+  .es-tabbadge { position:absolute; top:2px; right:4px; margin:0; pointer-events:none; }
+  .es-newchip { margin:0; }
+  .es-item.es-new { background:#14263a; box-shadow:inset 3px 0 0 #ED18BF; }
   .es-sec { padding:6px 14px 2px; }
   .es-h { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#8b929a; margin:14px 0 6px; }
   .es-msg { color:#b8bcbf; padding:12px 14px; line-height:1.35; }
@@ -186,6 +189,44 @@
   }
   const badge = (n) => (n > 0 ? `<span class="es-badge">${n > 99 ? '99+' : n}</span>` : '');
 
+  // ---------- unread alerts ----------
+  // An alert is unread until the Alerts tab has been on screen with it in the list. What was seen is kept in this
+  // browser profile (so reopening the menu, or a page reload, does not make old alerts look new). The very first
+  // state ever seen is the baseline: what the phone already had is not announced as new.
+  const SEEN_KEY = 'earshot.seen';
+  const SEEN_MAX = 300;
+  let seen = null;              // Set of alert keys, loaded on the first state
+  const fresh = new Set();      // keys that were unread when the Alerts tab opened: highlighted while it stays open
+  const alertKey = (n) => [n.uid, n.timestamp || 0, n.app_id || ''].join('|');
+  const alertList = () => (S && Array.isArray(S.notifications) ? S.notifications : []);
+  function saveSeen() {
+    while (seen.size > SEEN_MAX) seen.delete(seen.values().next().value);
+    try { localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])); } catch (e) { }
+  }
+  function syncSeen() {
+    if (seen) return;
+    let raw = null;
+    try { raw = JSON.parse(localStorage.getItem(SEEN_KEY)); } catch (e) { }
+    if (Array.isArray(raw)) { seen = new Set(raw.map(String)); return; }
+    seen = new Set(alertList().map(alertKey));
+    saveSeen();
+  }
+  function unreadAlerts() {
+    if (!S) return 0;       // nothing is known yet: no baseline either
+    syncSeen();
+    return alertList().filter((n) => !seen.has(alertKey(n))).length;
+  }
+  function markAlertsSeen() {
+    if (!S) return;
+    syncSeen();
+    let changed = false;
+    for (const n of alertList()) {
+      const k = alertKey(n);
+      if (!seen.has(k)) { seen.add(k); fresh.add(k); changed = true; }
+    }
+    if (changed) saveSeen();
+  }
+
   // ---------- pieces ----------
   function headHtml() {
     if (!S) return '<div class="es-head"><div class="es-name">Phone</div></div>';
@@ -218,7 +259,7 @@
   function tabsHtml() {
     const unread = S ? (S.unread || 0) : 0;
     const ringing = S && S.calls && S.calls.incoming ? 1 : 0;
-    const notifs = S ? (S.notifications || []).length : 0;
+    const notifs = S ? unreadAlerts() : 0;
     const tabs = [['calls', 'Calls', ringing], ['alerts', 'Alerts', notifs], ['messages', 'Messages', unread], ['settings', 'Settings', 0]];
     return tabs.map(([k, label, n]) => `<button class="${ui.tab === k ? 'es-on' : ''}" data-act="tab" data-a="${k}">${label}${badge(n)}</button>`).join('');
   }
@@ -257,7 +298,8 @@
     if (!list.length) return '<div class="es-msg">No notifications.</div>';
     let h = `<div class="es-bar"><span class="es-grow">${list.length} notification${list.length === 1 ? '' : 's'}</span>` +
       `<button class="es-btn es-small" data-act="clear-all" title="Hides them here. The phone keeps them.">Clear all</button></div>`;
-    h += list.map((n) => `<div class="es-item"><div class="es-main"><div class="es-top"><span class="es-app">${esc(n.app || 'iPhone')}</span>` +
+    h += list.map((n) => `<div class="es-item${fresh.has(alertKey(n)) ? ' es-new' : ''}"><div class="es-main"><div class="es-top"><span class="es-app">${esc(n.app || 'iPhone')}</span>` +
+      (fresh.has(alertKey(n)) ? '<span class="es-badge es-newchip">New</span>' : '') +
       `<span class="es-time">${esc(whenText(n.timestamp))}</span></div>` +
       (n.title ? `<div class="es-title">${esc(n.title)}</div>` : '') +
       (n.text ? `<div class="es-text">${esc(n.text)}</div>` : '') +
@@ -506,6 +548,18 @@
     channel.postMessage({ type: 'popup-visible', visible: present });
   }
 
+  function updateTabBadge() {
+    const tab = document.getElementById(TAB_ID);
+    if (!tab) return;
+    const n = unreadAlerts();
+    let b = tab.querySelector('.es-tabbadge');
+    if (!n) { if (b) b.remove(); tab.setAttribute('aria-label', 'Phone'); return; }
+    if (!b) { b = document.createElement('span'); b.className = 'es-badge es-tabbadge'; tab.appendChild(b); }
+    const t = n > 99 ? '99+' : String(n);
+    if (b.textContent !== t) b.textContent = t;
+    tab.setAttribute('aria-label', 'Phone, ' + n + ' new alert' + (n === 1 ? '' : 's'));
+  }
+
   function ensurePopup() {
     const p = popupParts();
     reportPresence(!!p);
@@ -523,7 +577,7 @@
       tab.setAttribute('aria-label', 'Phone');
       tab.setAttribute('role', 'button');
       tab.innerHTML = PHONE_ICON.replace('width="20" height="20"', 'width="26" height="26"');
-      tab.style.display = 'flex'; tab.style.alignItems = 'center'; tab.style.justifyContent = 'center'; tab.style.color = 'currentColor';
+      tab.style.display = 'flex'; tab.style.alignItems = 'center'; tab.style.justifyContent = 'center'; tab.style.color = 'currentColor'; tab.style.position = 'relative';
       tab.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); setMenuOpen(true); });
       strip.appendChild(tab);
     }
@@ -563,6 +617,7 @@
     overlay.style.height = Math.max(0, root.clientHeight - stripWrap.offsetHeight) + 'px';
     if (wantOpenUntil > Date.now()) { wantOpenUntil = 0; setMenuOpen(true); }
     applyTabState(p);
+    updateTabBadge();
   }
   function applyTabState(p, clicked) {
     const parts = p || popupParts();
@@ -586,6 +641,7 @@
   function setMenuOpen(open, clicked) {
     if (menuOpen === open) { applyTabState(); return; }
     menuOpen = open;
+    if (!open) fresh.clear();
     applyTabState(null, clicked);
     if (open) {
       act({ type: 'hello' });
@@ -668,8 +724,10 @@
     if (dead) return;
     if (ROLE === 'bar') { ensureBar(); return; }
     const overlay = document.getElementById(OVERLAY_ID);
-    if (!overlay || !menuOpen) return;
+    if (!overlay || !menuOpen) { updateTabBadge(); return; }
     if (interacting && !force) { renderQueued = true; return; }
+    if (S && !S.pair && !(S.setup && ui.tab !== 'settings') && ui.tab === 'alerts') markAlertsSeen(); else fresh.clear();
+    updateTabBadge();
     setHtml('earshot-head', headHtml());
     setHtml('earshot-call', callCardHtml());
     const body = document.getElementById('earshot-body');
