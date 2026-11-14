@@ -5,6 +5,9 @@ name: Earshot ARM64
 #   - earshot-engine-<ver>-aarch64.tar.gz  tetherd + tether + obexd, headless, stripped, with any
 #     library SteamOS does not ship (libical for obexd) bundled under lib/ ($ORIGIN/lib RUNPATH)
 #   - earshot-frame-<ver>.tar.gz           the installer, unit files, helper and Phone tab
+# Releases: push a tag earshot-v<ver> (e.g. earshot-v0.1.0). Earshot's own tag family; Tether's inherited
+# v* tags build nothing. <ver> names the assets; the Tether version it is based on goes in the frame
+# package's TETHER_VERSION file and the draft's title.
 # Branch pushes produce workflow artifacts only. The disabled "release" job at the bottom
 # is the signing and publishing step, modelled on Tragus's; it needs the maintainer's key.
 
@@ -16,7 +19,7 @@ on:
       - 'frame-*'
       - 'frame/**'
     tags:
-      - 'v*'
+      - 'earshot-v*'
 
 permissions:
   contents: read
@@ -51,6 +54,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       ver: ${{ steps.v.outputs.ver }}
+      tether: ${{ steps.v.outputs.tether }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,15 +62,19 @@ jobs:
       - id: v
         run: |
           if [ "${GITHUB_REF_TYPE}" = tag ]; then
-            # a release: the version is the tag (without a leading v), which is what the
-            # installer derives the asset names from
-            ver="${GITHUB_REF_NAME#v}"
+            # a release: the version is the tag without "earshot-v" (earshot-v0.1.0 -> 0.1.0), which
+            # is what the installer derives the asset names and the VERSION check from
+            ver="${GITHUB_REF_NAME#earshot-v}"
           else
             base="$(sed -n 's/^project(tether VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
             test -n "${base}"
             ver="${base}-frame.${GITHUB_RUN_NUMBER}"
           fi
           echo "ver=${ver}" >> "${GITHUB_OUTPUT}"
+          # the Tether version this fork is based on, shown beside Earshot's own
+          tether="$(sed -n 's/^project(tether VERSION \([0-9.]*\).*//p' CMakeLists.txt)"
+          test -n "${tether}"
+          echo "tether=${tether}" >> "${GITHUB_OUTPUT}"
 
   # Tests and the Frame package: the installer, units and the Phone tab.
   frame:
@@ -76,6 +84,7 @@ jobs:
     timeout-minutes: 15
     env:
       VER: ${{ needs.version.outputs.ver }}
+      TETHER_VER: ${{ needs.version.outputs.tether }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,8 +136,9 @@ jobs:
           done
           cp LICENSE "${d}/LICENSE"
           echo "${VER}" > "${d}/VERSION"
+          echo "${TETHER_VER}" > "${d}/TETHER_VERSION"
           chmod 755 "${d}"/*.sh "${d}"/*.py
-          chmod 644 "${d}"/*.service "${d}/LICENSE" "${d}/VERSION"
+          chmod 644 "${d}"/*.service "${d}/LICENSE" "${d}/VERSION" "${d}/TETHER_VERSION"
           {
             echo "Earshot for the Steam Frame ${VER}: installer, services and Phone tab."
             echo
@@ -399,7 +409,8 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  # Release: runs only for a pushed tag (v*). Signs both tarballs with the release key
+  # Release: runs only for a pushed tag earshot-v<ver> (Earshot's own family: Tether's inherited
+  # v* tags never build a Frame release). Signs both tarballs with the release key
   # (repository secret EARSHOT_RELEASE_KEY: a '#' comment line, then base64 of the 32-byte
   # ed25519 seed), checks it against the public key pinned below and in
   # frame/install/earshot-frame-install.py, and creates a DRAFT release. A person
@@ -420,6 +431,7 @@ jobs:
       contents: write
     env:
       VER: ${{ needs.version.outputs.ver }}
+      TETHER_VER: ${{ needs.version.outputs.tether }}
     steps:
       - name: Check out the signing requirements
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -494,9 +506,9 @@ jobs:
           # The first install downloads the installer unsigned (it carries the key that checks
           # everything after it), so publish its checksum where it can be compared.
           inst_sha="$(sha256sum earshot-frame-install.py | cut -d' ' -f1)"
-          printf 'Earshot %s for the Steam Frame. Install: see the README.\n\nSHA-256 of earshot-frame-install.py: %s\nAll checksums: earshot-frame.sha256\n' "${TAG}" "${inst_sha}" > notes.md
+          printf 'Earshot %s (based on Tether %s) for the Steam Frame. Install: see the README.\n\nSHA-256 of earshot-frame-install.py: %s\nAll checksums: earshot-frame.sha256\n' "${VER}" "${TETHER_VER}" "${inst_sha}" > notes.md
           gh release create "${TAG}" --repo "${REPO}" --draft --verify-tag \
-            --title "Earshot ${TAG}" --notes-file notes.md \
+            --title "Earshot ${VER} (Tether ${TETHER_VER})" --notes-file notes.md \
             "earshot-engine-${VER}-aarch64.tar.gz" "earshot-engine-${VER}-aarch64.tar.gz.sig" \
             "earshot-frame-${VER}.tar.gz" "earshot-frame-${VER}.tar.gz.sig" \
             earshot-frame-install.py Install-Earshot.desktop Uninstall-Earshot.desktop \

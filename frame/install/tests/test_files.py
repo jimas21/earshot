@@ -372,6 +372,14 @@ class DocsAndCiTests(unittest.TestCase):
         # the unit installed by the frame package is the one in the tarball
         self.assertIn("frame/install/earshot-obexd.service", wf)
 
+    def test_releases_use_the_earshot_tag_family_and_ship_the_tether_version(self):
+        wf = self.text(".github", "workflows", "earshot-arm64.yml")
+        self.assertIn("- 'earshot-v*'", wf)
+        self.assertNotIn("- 'v*'", wf)
+        self.assertIn('${GITHUB_REF_NAME#earshot-v}', wf)
+        self.assertIn('"${d}/TETHER_VERSION"', wf)
+        self.assertIn('--title "Earshot ${VER} (Tether ${TETHER_VER})"', wf)
+
     def test_both_tarballs_carry_the_version_the_installer_checks(self):
         wf = self.text(".github", "workflows", "earshot-arm64.yml")
         self.assertEqual(wf.count('> "${d}/VERSION"'), 2)

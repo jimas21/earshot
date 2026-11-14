@@ -53,7 +53,7 @@ REPO = "jimas21/earshot"
 # key is held by the maintainer and never committed. See .github/workflows/earshot-arm64.yml.
 PUBKEY = "tzXaDplSb7PN763T4PnKQv3Elih4XplDsCl523lMK8s="
 
-# Assets are named after the release tag with any leading "v" dropped: {ver}.
+# Assets are named after the release tag with "earshot-" and any leading "v" dropped: {ver}.
 COMPONENTS = [
     {
         "key": "engine",
@@ -193,8 +193,13 @@ class CheckFailed(InstallError):
         self.reason = reason
 
 
+TAG_PREFIX = "earshot-"  # Earshot's own tag family (earshot-v0.1.0), beside Tether's inherited v* tags
+
+
 def version_of(tag):
-    """A release tag without a leading v: v0.3.5 -> 0.3.5."""
+    """A release tag without its prefix: earshot-v0.1.0 -> 0.1.0, v0.3.5 -> 0.3.5."""
+    if tag.startswith(TAG_PREFIX):
+        tag = tag[len(TAG_PREFIX):]
     return tag[1:] if tag[:1] in ("v", "V") and tag[1:2].isdigit() else tag
 
 
@@ -338,11 +343,9 @@ def version_key(tag):
     any "-" decide first; at the same numbers a pre-release (1.0.0-rc.1, 0.3.5-frame.7)
     sorts before the release (1.0.0), and its dot-separated parts compare as numbers when
     they are numbers (rc.2 < rc.10). An empty or missing tag is () and sorts lowest."""
-    text = (tag or "").strip()
+    text = version_of((tag or "").strip())
     if not text:
         return ()
-    if text[:1] in ("v", "V") and text[1:2].isdigit():
-        text = text[1:]
     text = text.split("+", 1)[0]
     core, _, pre = text.partition("-")
     nums = []
