@@ -38,6 +38,8 @@ namespace tether::bluetooth::ancs {
         std::string data_source_path;
 
         bool subscribed = false;
+        // The LE link is down and the subscription has been put away until it returns.
+        bool waiting_for_link = false;
 
         std::atomic<bool> ready{false};
         bool content_enabled = false;
@@ -84,6 +86,8 @@ namespace tether::bluetooth::ancs {
         void verify_subscription();
         void rebuild(const std::string& reason);
         bool link_alive() const;
+        bool link_usable() const;
+        void wait_for_link();
         void handle_source_event(const SourceEvent& event, int64_t now);
         void handle_response(const Request& request, const Response& response, int64_t now);
         std::string app_display_name(const std::string& app_id);
@@ -444,6 +448,35 @@ namespace tether::bluetooth::ancs {
         return true;
     }
 
+    // What BlueZ says about the device's LE link, without touching the GATT tree. A device BlueZ does not list
+    // counts as usable: the other checks then decide, as they always have.
+    bool AncsClientState::link_usable() const {
+        for (const auto& device : monitor->snapshot().devices) {
+            if (device.path == device_path)
+                return ancs_link_usable(device.has_le_bearer, device.le_connected, device.services_resolved);
+        }
+        return true;
+    }
+
+    // The link is down: put the subscription away once, quietly, and wait. Every cycle of rebuilding against the
+    // dead link would only restart the session count and say the phone has not granted access when it is the link.
+    void AncsClientState::wait_for_link() {
+        if (!waiting_for_link) {
+            waiting_for_link = true;
+            debug::log(INFO, "ancs: the LE link is down, waiting for it to return");
+            drop_gatt_paths();
+            sequencer->reset();
+            in_progress.clear();
+            next_probe = 0;
+            next_verify = 0;
+            std::lock_guard<std::mutex> lock(inbox);
+            pending_source.clear();
+            pending_data.clear();
+            pending_actions.clear();
+        }
+        set_status(false, "Waiting for the iPhone's LE link.");
+    }
+
     void AncsClientState::handle_source_event(const SourceEvent& event, int64_t now) {
         (void)now;
         // No content here, only that the phone announced something: the first thing to check when a
@@ -611,6 +644,7 @@ namespace tether::bluetooth::ancs {
         state_->unsubscribe();
         state_->device_path = device_path;
         state_->subscribed = false;
+        state_->waiting_for_link = false;
         state_->next_discover = 0;
         state_->next_subscribe = 0;
         state_->next_probe = 0;
@@ -684,6 +718,15 @@ namespace tether::bluetooth::ancs {
         auto* s = state_.get();
         if (s->device_path.empty())
             return;
+
+        if (!s->link_usable()) {
+            s->wait_for_link();
+            return;
+        }
+        if (s->waiting_for_link) {
+            s->waiting_for_link = false;
+            debug::log(INFO, "ancs: the LE link is back");
+        }
 
         if (s->subscribed && now >= s->next_verify) {
             s->next_verify = now + (s->ready ? ANCS_VERIFY_SECONDS : ANCS_RETRY_SECONDS);

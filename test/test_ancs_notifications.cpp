@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <tether/bluetooth/ancs/client.hpp>
 #include <tether/bluetooth/ancs/notifications.hpp>
 #include <tether/bluetooth/config.hpp>
 
@@ -249,4 +250,16 @@ TEST(BluetoothConfig, SerializeStampsTheVersion) {
     Config config;
     config.ancs_content_enabled = false;
     EXPECT_FALSE(deserialize_config(serialize_config(config)).ancs_content_enabled);
+}
+
+// While the LE link is down there is nothing to subscribe to, so the client waits for it instead of rebuilding.
+TEST(AncsLink, WithTheBearerApiTheBearerDecides) {
+    EXPECT_TRUE(ancs_link_usable(true, true, true));
+    EXPECT_FALSE(ancs_link_usable(true, false, true)) << "a Classic-only link resolved services, but LE is down";
+    EXPECT_FALSE(ancs_link_usable(true, false, false));
+}
+
+TEST(AncsLink, WithoutTheBearerApiServicesResolvedIsTheOnlySign) {
+    EXPECT_TRUE(ancs_link_usable(false, false, true));
+    EXPECT_FALSE(ancs_link_usable(false, false, false)) << "BlueZ clears ServicesResolved when the link drops";
 }

@@ -18,6 +18,15 @@ namespace tether::bluetooth::ancs {
     // How often a live subscription is re-confirmed against BlueZ.
     inline constexpr int ANCS_VERIFY_SECONDS = 30;
 
+    // Whether the LE link that carries ANCS is up right now, from what BlueZ reports about the device. With the
+    // per-bearer API (Bearer.LE1) its Connected property says so. Without it (stock bluetoothd) there is no LE flag
+    // at all, and Device1.ServicesResolved, which BlueZ clears when the link drops, is the only sign. While it is
+    // down there is nothing to subscribe to: rebuilding the subscription against the stale GATT tree only fails, and
+    // does so again every few seconds.
+    inline bool ancs_link_usable(bool has_le_bearer, bool le_connected, bool services_resolved) {
+        return has_le_bearer ? le_connected : services_resolved;
+    }
+
     // Defined in client.cpp.
     struct AncsClientState;
 
