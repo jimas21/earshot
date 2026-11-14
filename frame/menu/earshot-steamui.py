@@ -6,11 +6,11 @@ Bridges Tether's local socket (docs/PROTOCOL.md) and Steam's own UI:
   tetherd --(UNIX socket, JSON lines)--> this helper --(DevTools, 127.0.0.1:8080)--> earshot-menu.js
                                               |  state goes into the pages with Runtime.evaluate,
                                               |  actions come back through a Runtime binding
-                                              +--> vrcmd --notify (SteamVR notifications)
+                                              +--> SteamVR notifications (OpenVR, vrcmd --notify as the fallback)
 
 Nothing listens on any port. One thread runs a selector loop, so an idle helper
 sleeps until the next timer (a few seconds apart) or a socket event. External
-commands (vrcmd, busctl, systemd-run) run on one worker thread.
+commands (vrcmd, busctl, systemd-run) run on one worker thread; OpenVR pop-ups on another.
 
 Logs are warning level by default and never contain message, notification or
 caller text. Set EARSHOT_LOG=info or debug for more detail (still no text).
@@ -20,6 +20,7 @@ Python 3 standard library only.
 
 import base64
 import collections
+import ctypes
 import hashlib
 import heapq
 import itertools
@@ -335,6 +336,267 @@ class Executor:
     def close(self):
         if self.thread:
             self.jobs.put(None)
+
+
+# ---------------------------------------------------------------------------
+# Pop-ups from Earshot's own SteamVR notification source (OpenVR), vrcmd as the fallback
+# ---------------------------------------------------------------------------
+#
+# vrcmd --notify creates its own overlay ("testing notifications"), and SteamVR titles every pop-up with the
+# overlay's name. Calling the flat OpenVR API ourselves lets the pop-up say "Earshot". Only what is needed is
+# declared: the first entries of two function tables (openvr_capi.h, Valve's openvr repository). The first two
+# entries of VR_IVROverlay_FnTable (FindOverlay, CreateOverlay) are the same in every version from
+# IVROverlay_018 to _028, and VR_IVRNotifications_FnTable (CreateNotification, RemoveNotification) is the same
+# in IVRNotifications_002, the only version since 1.0.
+
+OPENVR_LIBS = ("/opt/steamvr/bin/linuxarm64/libopenvr_api.so", "/opt/steamvr/bin/linux64/libopenvr_api.so")
+OVERLAY_VERSIONS = tuple("IVROverlay_%03d" % n for n in range(28, 18, -1))   # newest first
+NOTIFICATIONS_VERSIONS = ("IVRNotifications_002",)
+OVERLAY_KEY = "earshot.notifications"
+OVERLAY_NAME = "Earshot"
+VR_APPLICATION_BACKGROUND = 3          # EVRApplicationType: never starts SteamVR, fails if it is not running
+VR_NOTIFICATION_TRANSIENT = 0          # EVRNotificationType: hides itself after the time the person set in SteamVR
+VR_NOTIFICATION_STYLE_APPLICATION = 100
+VR_OVERLAY_KEY_IN_USE = 17             # EVROverlayError
+
+
+class _OverlayTable(ctypes.Structure):
+    _fields_ = [
+        ("FindOverlay", ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64))),
+        ("CreateOverlay", ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p,
+                                           ctypes.POINTER(ctypes.c_uint64))),
+    ]
+
+
+class _NotificationsTable(ctypes.Structure):
+    _fields_ = [
+        ("CreateNotification", ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_int,
+                                                ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p,
+                                                ctypes.POINTER(ctypes.c_uint32))),
+        ("RemoveNotification", ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint32)),
+    ]
+
+
+class OpenVrError(Exception):
+    """Why a pop-up could not go through OpenVR. The message never contains notification text."""
+
+
+class OpenVrNotifier:
+    """Shows pop-ups through libopenvr_api.so. notify() blocks, so it runs on a worker thread (see Popups).
+
+    One background-application session is kept between pop-ups and dropped after a failure (SteamVR may have
+    restarted) or after idle_close seconds without one, so this process never holds SteamVR's shutdown up
+    while it is not polling for events. The next pop-up opens a fresh session."""
+
+    def __init__(self, paths=OPENVR_LIBS, loader=None, clock=time.monotonic, idle_close=30.0):
+        self.paths = tuple(paths)
+        self.loader = loader or ctypes.CDLL
+        self.clock = clock
+        self.idle_close = idle_close
+        self.lock = threading.Lock()
+        self.lib = None
+        self.inited = False
+        self.overlay = None
+        self.notifications = None
+        self.handle = None
+        self.last_used = 0.0
+        self.reported = None   # the last failure reason that was logged, so a steady failure logs once
+
+    # ----- the library -----
+
+    def load(self):
+        if self.lib is not None:
+            return self.lib
+        for path in self.paths:
+            try:
+                lib = self.loader(path)
+                self.bind(lib, "VR_InitInternal", ctypes.c_void_p, [ctypes.POINTER(ctypes.c_int), ctypes.c_int])
+                self.bind(lib, "VR_ShutdownInternal", None, [])
+                self.bind(lib, "VR_GetGenericInterface", ctypes.c_void_p,
+                          [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)])
+            except (OSError, AttributeError):
+                continue
+            self.lib = lib
+            return lib
+        raise OpenVrError("library not found")
+
+    @staticmethod
+    def bind(lib, name, restype, argtypes):
+        fn = getattr(lib, name)
+        try:
+            fn.restype = restype
+            fn.argtypes = argtypes
+        except (AttributeError, TypeError):
+            pass   # a stand-in that is not a C function pointer (tests)
+
+    # ----- a session -----
+
+    def interface(self, versions, table):
+        for version in versions:
+            error = ctypes.c_int(0)
+            address = self.lib.VR_GetGenericInterface(("FnTable:" + version).encode("ascii"), ctypes.byref(error))
+            if address and error.value == 0:
+                log.debug("openvr interface %s", version)
+                return ctypes.cast(address, ctypes.POINTER(table)).contents
+        raise OpenVrError("no usable %s" % versions[0].split("_")[0])
+
+    def open(self):
+        self.load()
+        error = ctypes.c_int(0)
+        self.lib.VR_InitInternal(ctypes.byref(error), VR_APPLICATION_BACKGROUND)
+        if error.value != 0:
+            raise OpenVrError("init error %d" % error.value)   # SteamVR not running is code 121
+        self.inited = True
+        self.overlay = self.interface(OVERLAY_VERSIONS, _OverlayTable)
+        self.notifications = self.interface(NOTIFICATIONS_VERSIONS, _NotificationsTable)
+        handle = ctypes.c_uint64(0)
+        code = self.overlay.CreateOverlay(OVERLAY_KEY.encode(), OVERLAY_NAME.encode(), ctypes.byref(handle))
+        if code == VR_OVERLAY_KEY_IN_USE:
+            code = self.overlay.FindOverlay(OVERLAY_KEY.encode(), ctypes.byref(handle))
+        if code != 0:
+            raise OpenVrError("overlay error %d" % code)
+        self.handle = handle.value
+
+    def drop(self):
+        if self.inited:
+            try:
+                self.lib.VR_ShutdownInternal()
+            except Exception as error:
+                log.debug("openvr shutdown failed: %s", type(error).__name__)
+        self.inited = False
+        self.overlay = self.notifications = self.handle = None
+
+    def post(self, text):
+        data = str(text).replace("\0", "").encode("utf-8", "replace")
+        notification_id = ctypes.c_uint32(0)
+        code = self.notifications.CreateNotification(
+            self.handle, 0, VR_NOTIFICATION_TRANSIENT, data, VR_NOTIFICATION_STYLE_APPLICATION, None,
+            ctypes.byref(notification_id))
+        if code != 0:
+            raise OpenVrError("notification error %d" % code)
+
+    # ----- what Popups calls -----
+
+    def notify(self, text):
+        """Shows one pop-up and returns True, or raises. A session that has gone bad is dropped and replaced once."""
+        with self.lock:
+            for _ in (0, 1):
+                reused = self.handle is not None
+                try:
+                    if not reused:
+                        self.open()
+                    self.post(text)
+                except Exception as error:
+                    self.drop()
+                    if reused:
+                        continue            # probably a restarted SteamVR: one fresh session, then give up
+                    self.report(error)
+                    raise
+                self.last_used = self.clock()
+                if self.reported is not None:
+                    log.warning("SteamVR notifications are back (OpenVR)")
+                    self.reported = None
+                return True
+
+    def report(self, error):
+        reason = str(error) if isinstance(error, OpenVrError) else type(error).__name__
+        if reason != self.reported:
+            self.reported = reason
+            log.warning("OpenVR pop-ups unavailable (%s); using vrcmd", reason)
+
+    def idle_tick(self):
+        if self.lock.acquire(blocking=False):
+            try:
+                if self.handle is not None and self.clock() - self.last_used >= self.idle_close:
+                    self.drop()
+            finally:
+                self.lock.release()
+
+    def close(self):
+        if self.lock.acquire(timeout=2.0):
+            try:
+                self.drop()
+            finally:
+                self.lock.release()
+
+
+class Popups:
+    """Sends each pop-up through backend.notify(text) on a worker thread of its own (an OpenVR call can block).
+    When that raises or returns false, failed(text) runs on the loop thread: the vrcmd fallback. A worker that is
+    stuck in a call for stuck_after seconds is bypassed, so pop-ups never stop. inline=True runs on the caller (tests)."""
+
+    def __init__(self, loop, backend, failed, inline=False, stuck_after=15.0, idle_poll=5.0, clock=time.monotonic):
+        self.loop = loop
+        self.backend = backend
+        self.failed = failed
+        self.inline = inline
+        self.stuck_after = stuck_after
+        self.idle_poll = idle_poll
+        self.clock = clock
+        self.jobs = queue.Queue()
+        self.redo = collections.deque()
+        self.thread = None
+        self.busy_since = None
+        self.closed = False
+        loop.wake_handlers.append(self.drain)
+
+    def attempt(self, text):
+        try:
+            return bool(self.backend.notify(text))
+        except Exception as error:
+            log.debug("pop-up backend failed: %s", type(error).__name__)
+            return False
+
+    def send(self, text):
+        if self.closed:
+            return
+        if self.inline:
+            if not self.attempt(text):
+                self.failed(text)
+            return
+        busy = self.busy_since
+        if busy is not None and self.clock() - busy > self.stuck_after:
+            self.failed(text)
+            return
+        if self.thread is None:
+            self.thread = threading.Thread(target=self.work, name="earshot-popup", daemon=True)
+            self.thread.start()
+        self.jobs.put(text)
+
+    def work(self):
+        while True:
+            try:
+                text = self.jobs.get(timeout=self.idle_poll)
+            except queue.Empty:
+                try:
+                    self.backend.idle_tick()
+                except Exception as error:
+                    log.debug("pop-up idle failed: %s", type(error).__name__)
+                continue
+            if text is None:
+                return
+            self.busy_since = self.clock()
+            ok = self.attempt(text)
+            self.busy_since = None
+            if not ok:
+                self.redo.append(text)
+                self.loop.wake()
+
+    def drain(self):
+        while self.redo:
+            text = self.redo.popleft()
+            if not self.closed:
+                self.failed(text)
+
+    def close(self):
+        self.closed = True
+        if self.thread:
+            self.jobs.put(None)
+            self.thread.join(2.0)
+        try:
+            self.backend.close()
+        except Exception as error:
+            log.debug("pop-up backend close failed: %s", type(error).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -1544,7 +1806,7 @@ class Pairing:
 class Helper:
     def __init__(self, loop=None, settings=None, connect_tether=connect_unix, executor=None,
                  menu_file=MENU_FILE, cdp_base=CDP_BASE, http_get=http_get_json, ws_factory=WsClient,
-                 vrcmd=VRCMD, updater=UPDATER, status_file=UPDATE_STATUS_FILE, versions_file=VERSIONS_FILE,
+                 vrcmd=VRCMD, notifier=None, updater=UPDATER, status_file=UPDATE_STATUS_FILE, versions_file=VERSIONS_FILE,
                  settings_path=None, scan=scan_processes, burst_window=8.0, push_delay=0.15,
                  tether_backoff=(1.0, 30.0), presence_every=10.0, send_timeout=45.0,
                  settle_seconds=5.0, auto_update_first=AUTO_UPDATE_FIRST, clock=None, exists=os.path.exists):
@@ -1552,6 +1814,8 @@ class Helper:
         self.settings = settings or Settings(settings_path or os.path.join(CONFIG_DIR, "settings.json"))
         self.exec = executor or Executor(self.loop)
         self.vrcmd = vrcmd
+        self.popups = Popups(self.loop, notifier if notifier is not None else OpenVrNotifier(),
+                             self.vrcmd_fallback, inline=getattr(self.exec, "inline", False))
         self.exists = exists
         self.updater = updater
         self.status_file = status_file
@@ -1659,6 +1923,7 @@ class Helper:
         self.stopping = True
         self.link.stop()
         self.shell.teardown()
+        self.popups.close()
         self.exec.close()
 
     # ----- Tether side -----
@@ -1877,8 +2142,7 @@ class Helper:
 
     def notify_direct(self, text):
         """A SteamVR notification that does not depend on the alert settings (it asks for a person's attention)."""
-        if self.exists(self.vrcmd):
-            self.exec.run([self.vrcmd, "--notify", vrcmd_text(text)], None, timeout=20)
+        self.popups.send(text)
 
     def phone_paired(self):
         address = str(self.bt_status.get("device_address") or "").lower()
@@ -2062,11 +2326,11 @@ class Helper:
     def toast_call(self, who):
         if not self.can_toast():
             return
-        self.send_vrcmd("Incoming call: %s" % trim(who, 60) if who and self.settings.get("preview") else "Incoming call")
+        self.send_popup("Incoming call: %s" % trim(who, 60) if who and self.settings.get("preview") else "Incoming call")
 
     def emit_collapsed(self, key, text, noun, who):
         for t in self.collapser.add(key, text, noun, who, self.loop.clock()):
-            self.send_vrcmd(t)
+            self.send_popup(t)
         self.arm_collapse_timer()
 
     def arm_collapse_timer(self):
@@ -2080,12 +2344,15 @@ class Helper:
         self.collapse_timer = None
         for t in self.collapser.flush(self.loop.clock()):
             if self.frame_active():
-                self.send_vrcmd(t)
+                self.send_popup(t)
         self.arm_collapse_timer()
 
-    def send_vrcmd(self, text):
-        if not self.frame_active():
-            return
+    def send_popup(self, text):
+        if self.frame_active():
+            self.popups.send(text)
+
+    def vrcmd_fallback(self, text):
+        """Runs on the loop thread when the OpenVR path could not show a pop-up."""
         if not self.exists(self.vrcmd):
             if not self.vrcmd_missing_logged:
                 log.warning("vrcmd not found; SteamVR notifications are off")

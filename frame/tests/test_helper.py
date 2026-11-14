@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fakes import FakeDevTools, FakeSpawn, FakeTether, load_helper, pump, wait_for  # noqa: E402
+from fakes import FakeDevTools, FakeNotifier, FakeSpawn, FakeTether, load_helper, pump, wait_for  # noqa: E402
 
 H = load_helper()
 
@@ -71,8 +71,10 @@ class Rig:
             settings_path=self.settings_path, exists=lambda p: True, scan=lambda names: self.worn[0],
             status_file=self.status_file, versions_file=os.path.join(self.tmp, "versions.json"),
             updater=self.updater, burst_window=0.4, push_delay=0.02, tether_backoff=(0.05, 0.2),
-            presence_every=3600, send_timeout=0.5, settle_seconds=0.0, auto_update_first=3600)
+            presence_every=3600, send_timeout=0.5, settle_seconds=0.0, auto_update_first=3600,
+            notifier=FakeNotifier(fail=True))   # by default SteamVR "is not running": pop-ups go to vrcmd
         kwargs.update(helper_kwargs)
+        self.notifier = kwargs["notifier"]
         self.helper = H.Helper(**kwargs)
         self.helper.shell.POLL_FAST = 0.1
         self.helper.shell.POLL_IDLE = 0.1
@@ -109,6 +111,10 @@ class Rig:
 
     def vrcmd_texts(self):
         return [c[2] for c in self.spawn.of("vrcmd") if c[1] == "--notify"]
+
+    def popup_texts(self):
+        """What the OpenVR path showed (the notifier is a fake)."""
+        return list(self.notifier.shown)
 
     def busctl_methods(self):
         return [c[6] for c in self.spawn.of("busctl")]
@@ -197,6 +203,40 @@ class PriorityTests(unittest.TestCase):
         rig.tether.push(notif(1, title="Hi", body="there"))
         self.assertTrue(rig.pump(lambda: rig.vrcmd_texts(), 2))
         self.assertEqual(rig.vrcmd_texts()[0], "Chat: Hi - there")
+
+    def test_the_openvr_path_shows_the_pop_up_and_vrcmd_stays_unused(self):
+        rig = Rig(self, notifier=FakeNotifier())
+        rig.start()
+        rig.tether.push(notif(31, title="Hi", body="there"))
+        self.assertTrue(rig.pump(lambda: rig.popup_texts(), 2))
+        self.assertEqual(rig.popup_texts(), ["Chat: Hi - there"])
+        self.assertEqual(rig.vrcmd_texts(), [])
+
+    def test_the_openvr_path_gets_the_text_unchanged_even_when_it_starts_with_a_dash(self):
+        rig = Rig(self, notifier=FakeNotifier())
+        rig.start()
+        rig.tether.push(notif(32, app="--help", title="x", body="y"))
+        self.assertTrue(rig.pump(lambda: rig.popup_texts(), 2))
+        self.assertTrue(rig.popup_texts()[0].startswith("-"))       # no option to inject: nothing to protect
+        self.assertEqual(rig.vrcmd_texts(), [])
+
+    def test_a_pop_up_falls_back_to_vrcmd_when_openvr_fails_and_openvr_is_tried_again_next_time(self):
+        rig = Rig(self, notifier=FakeNotifier(fail_next=1))
+        rig.start()
+        rig.tether.push(notif(33, app="Chat", title="One", body=""))
+        self.assertTrue(rig.pump(lambda: rig.vrcmd_texts(), 2))
+        self.assertEqual(rig.vrcmd_texts(), ["Chat: One"])
+        self.assertEqual(rig.popup_texts(), [])
+        rig.tether.push(notif(34, app="Other", app_id="com.example.other", title="Two", body=""))
+        self.assertTrue(rig.pump(lambda: rig.popup_texts(), 2))
+        self.assertEqual(rig.popup_texts(), ["Other: Two"])
+        self.assertEqual(rig.vrcmd_texts(), ["Chat: One"])
+
+    def test_the_notifier_is_released_when_the_helper_stops(self):
+        rig = Rig(self, notifier=FakeNotifier())
+        rig.start()
+        rig.helper.shutdown()
+        self.assertEqual(rig.notifier.closed, 1)
 
     def test_a_notification_text_can_never_look_like_a_vrcmd_option(self):
         rig = Rig(self, worn=True)

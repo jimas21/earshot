@@ -5,6 +5,7 @@ The helper takes its transports as parameters; these fakes speak the real wire f
 """
 
 import base64
+import ctypes
 import hashlib
 import importlib.util
 import json
@@ -345,6 +346,141 @@ class FakeSpawn:
 
     def of(self, name):
         return [c for c in self.calls if os.path.basename(c[0]) == name]
+
+
+# ---------------------------------------------------------------------------
+
+class FakeNotifier:
+    """Stands in for OpenVrNotifier in the helper tests: records what it was asked to show.
+    fail=True behaves like a headset where SteamVR is not running; fail_next fails that many calls, then works."""
+
+    def __init__(self, fail=False, fail_next=0):
+        self.shown = []
+        self.fail = fail
+        self.fail_next = fail_next
+        self.closed = 0
+        self.idle_ticks = 0
+
+    def notify(self, text):
+        if self.fail or self.fail_next > 0:
+            self.fail_next = max(0, self.fail_next - 1)
+            raise RuntimeError("SteamVR is not running")
+        self.shown.append(text)
+        return True
+
+    def idle_tick(self):
+        self.idle_ticks += 1
+
+    def close(self):
+        self.closed += 1
+
+
+# ---------------------------------------------------------------------------
+
+class _FakeOverlayTable(ctypes.Structure):
+    # openvr_capi.h, struct VR_IVROverlay_FnTable: the first two entries (the real table goes on for ~100 more)
+    _fields_ = [
+        ("FindOverlay", ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64))),
+        ("CreateOverlay", ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p,
+                                           ctypes.POINTER(ctypes.c_uint64))),
+        ("padding", ctypes.c_void_p * 8),
+    ]
+
+
+class _FakeNotificationsTable(ctypes.Structure):
+    # struct VR_IVRNotifications_FnTable
+    _fields_ = [
+        ("CreateNotification", ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_int,
+                                                ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p,
+                                                ctypes.POINTER(ctypes.c_uint32))),
+        ("RemoveNotification", ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint32)),
+    ]
+
+
+class FakeOpenVR:
+    """A stand-in for libopenvr_api.so: the three exported functions the notifier uses, and C function tables
+    built with ctypes so the notifier's struct layout and calling convention are exercised for real.
+
+    overlay_versions: the IVROverlay_NNN strings this "SteamVR" knows. init_error: what VR_InitInternal reports
+    (121 = SteamVR is not running). fail_notifications: the next N CreateNotification calls return an error."""
+
+    OVERLAY_HANDLE = 4242
+
+    def __init__(self, overlay_versions=("IVROverlay_028", "IVROverlay_027"), init_error=0, key_in_use=False):
+        self.overlay_versions = set(overlay_versions)
+        self.init_error = init_error
+        self.key_in_use = key_in_use
+        self.fail_notifications = 0
+        self.inits = []              # application type of each VR_InitInternal call
+        self.shutdowns = 0
+        self.asked = []              # every interface string asked for
+        self.created = []            # (key, name)
+        self.found = []
+        self.notifications = []      # (overlay handle, user value, type, text, style, image)
+        self.live = False
+        self.overlay_table = _FakeOverlayTable(
+            ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64))(self._find),
+            ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p,
+                             ctypes.POINTER(ctypes.c_uint64))(self._create))
+        self.notifications_table = _FakeNotificationsTable(
+            ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_int, ctypes.c_char_p,
+                             ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32))(self._notify),
+            ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint32)(lambda i: 0))
+
+    # the library's exports (plain functions: the notifier passes ctypes.byref objects)
+    def VR_InitInternal(self, perror, app_type):
+        self.inits.append(app_type)
+        perror._obj.value = self.init_error
+        self.live = self.init_error == 0
+
+    def VR_ShutdownInternal(self):
+        self.shutdowns += 1
+        self.live = False
+
+    def VR_GetGenericInterface(self, name, perror):
+        name = name.decode()
+        self.asked.append(name)
+        if not self.live:
+            perror._obj.value = 108
+            return None
+        if name.startswith("FnTable:IVROverlay_") and name[8:] in self.overlay_versions:
+            perror._obj.value = 0
+            return ctypes.addressof(self.overlay_table)
+        if name == "FnTable:IVRNotifications_002":
+            perror._obj.value = 0
+            return ctypes.addressof(self.notifications_table)
+        perror._obj.value = 106      # VRInitError_Init_InvalidInterface
+        return None
+
+    # the function tables
+    def _create(self, key, name, handle):
+        self.created.append((key.decode(), name.decode()))
+        if self.key_in_use:
+            return 17
+        handle[0] = self.OVERLAY_HANDLE
+        return 0
+
+    def _find(self, key, handle):
+        self.found.append(key.decode())
+        handle[0] = self.OVERLAY_HANDLE
+        return 0
+
+    def _notify(self, overlay, user_value, kind, text, style, image, pid):
+        if self.fail_notifications > 0:
+            self.fail_notifications -= 1
+            return 104       # VRNotificationError_ServiceUnavailable
+        self.notifications.append((overlay, user_value, kind, text.decode(), style, image))
+        pid[0] = len(self.notifications)
+        return 0
+
+    def texts(self):
+        return [n[3] for n in self.notifications]
+
+    def loader(self, path):
+        """Stands in for ctypes.CDLL: only the first path "exists"."""
+        if path != "/fake/libopenvr_api.so":
+            raise OSError("cannot open " + path)
+        return self
 
 
 # ---------------------------------------------------------------------------
