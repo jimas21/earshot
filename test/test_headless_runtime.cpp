@@ -394,6 +394,10 @@ namespace {
 
     TEST_F(HeadlessRuntime, ReceiveEventsDoNotDependOnNotifierInitialization) {
         env["LD_PRELOAD"] = TETHER_NOTIFY_FIXTURE;
+        // Under AddressSanitizer the daemon refuses to start when any preloaded library precedes the sanitizer
+        // runtime. The fixture only has to win the notify_init lookup, so drop that start-up check for this daemon.
+        const char* inherited = std::getenv("ASAN_OPTIONS");
+        env["ASAN_OPTIONS"] = std::string(inherited ? inherited : "") + ":verify_asan_link_order=0";
         Peer local, phone;
         start(local);
         connect_phone(phone);
