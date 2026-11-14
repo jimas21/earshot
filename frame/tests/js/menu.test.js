@@ -802,3 +802,22 @@ test('update check: the tap is acknowledged at once, then the answer replaces it
   assert.match(resultLine(p), /No answer from the Earshot service/);
   assert.equal(byAct(p, 'check-updates').disabled, false);
 });
+
+test('uninstall: asks first, Cancel goes back, Uninstall sends one action and says it is removing', () => {
+  const p = updatePage(null);
+  assert.equal(byAct(p, 'uninstall-do'), null);                 // nothing destructive on the page at first
+  click(p, byAct(p, 'uninstall-ask'));
+  assert.ok(byAct(p, 'uninstall-do'));
+  click(p, byAct(p, 'uninstall-cancel'));
+  assert.equal(byAct(p, 'uninstall-do'), null);
+  click(p, byAct(p, 'uninstall-ask'));
+  click(p, byAct(p, 'uninstall-do'));
+  assert.deepEqual(p.last(), { type: 'uninstall' });
+  const busy = updatePage({ state: 'uninstalling', message: 'Removing Earshot...', time: nowS() });
+  assert.match(busy.doc.body.textContent, /Removing Earshot\.\.\./);
+  assert.equal(byAct(busy, 'uninstall-ask'), null);
+  assert.equal(byAct(busy, 'check-updates').disabled, false);   // the Updates line does not echo it
+  const stuck = updatePage({ state: 'uninstalling', message: 'Removing Earshot...', time: nowS() - 600 });
+  assert.match(stuck.doc.body.textContent, /did not finish/);
+  assert.ok(byAct(stuck, 'uninstall-ask'));
+});

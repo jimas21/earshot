@@ -156,6 +156,7 @@
   .es-choice { display:flex; flex-wrap:wrap; gap:4px; }
   .es-choice button { border:0; border-radius:3px; background:#23262e; color:#b8bcbf; font:inherit; font-size:12px; padding:6px 8px; cursor:pointer; }
   .es-choice button.es-on { background:#1a9fff; color:#fff; }
+  .es-choice button.es-danger { background:#c0392b; color:#fff; }
   .es-note { font-size:11px; color:#8b929a; line-height:1.3; }
   .es-result { font-size:14px; color:#fff; line-height:1.35; padding:4px 0; overflow-wrap:anywhere; }
   .es-bar { display:flex; align-items:center; gap:8px; padding:6px 14px; }
@@ -474,6 +475,7 @@
   // "Check for updates" always ends in a line that says what happened. Until the helper has answered (it writes
   // "checking" at once), the tap itself is acknowledged here; if nothing answers, that is said too.
   let checkTapped = 0, checkTimer = null;
+  let uninstallAsk = false;
   cleanups.push(() => clearTimeout(checkTimer));
   const UPDATE_NO_ANSWER_MS = 15000;
   const UPDATE_FALLBACK = { uptodate: 'Up to date', updated: 'Updated', noreleases: 'No releases published yet', failed: 'Could not check', checking: 'Checking for updates...', updating: 'Updating...' };
@@ -485,7 +487,7 @@
         ? { busy: true, text: 'Checking for updates...', when: 0 }
         : { busy: false, text: 'No answer from the Earshot service. Try again.', when: 0 };
     }
-    if (!st) return { busy: false, text: '', when: 0 };
+    if (!st || st.state === 'uninstalling') return { busy: false, text: '', when: 0 };
     const working = st.state === 'checking' || st.state === 'updating';
     const limit = st.state === 'checking' ? 180 : 900;
     const busy = working && st.time && (Date.now() / 1000 - st.time) < limit;
@@ -533,6 +535,14 @@
       `<div class="es-row es-col"><div class="es-choice"><button data-act="check-updates"${u.busy ? ' disabled' : ''}>${u.busy ? esc(u.text) : 'Check for updates'}</button></div>` +
       (u.text && !u.busy ? `<div class="es-result">${esc(u.text)}${u.when ? ` <span class="es-note">${esc(whenText(u.when))}</span>` : ''}</div>` : '') + '</div>' +
       (S.update && S.update.about ? `<div class="es-note" style="margin-top:8px">${esc(S.update.about)}</div>` + (S.update.about_base ? `<div class="es-note" style="opacity:.7;font-size:.85em">${esc(S.update.about_base)}</div>` : '') : Object.keys(versions).length ? `<div class="es-note" style="margin-top:8px">Installed: ${Object.keys(versions).map((k) => esc(k) + ' ' + esc(versions[k])).join(', ')}</div>` : '');
+    const ust = S.update && S.update.status;
+    const unState = ust && ust.state === 'uninstalling' ? ((Date.now() / 1000 - (ust.time || 0)) < 120 ? 'busy' : 'stuck') : '';
+    h += '<div class="es-h">Uninstall</div><div class="es-row es-col">' + (unState === 'busy'
+      ? '<div class="es-result">Removing Earshot...</div>'
+      : (unState === 'stuck' ? '<div class="es-result">The uninstall did not finish. Try again.</div>' : '') + (uninstallAsk
+        ? '<div class="es-note">Remove Earshot from this headset? Your settings are kept if you install it again.</div>' +
+          '<div class="es-choice"><button class="es-danger" data-act="uninstall-do">Uninstall</button><button data-act="uninstall-cancel">Cancel</button></div>'
+        : '<div class="es-choice"><button data-act="uninstall-ask">Uninstall Earshot</button></div>')) + '</div>';
     return h + '</div>';
   }
 
@@ -870,6 +880,9 @@
       case 'setting-toggle': act({ type: 'set_setting', key: a, value: b === '1' }); break;
       case 'mute': act({ type: 'mute', app_id: a, muted: b === '1' }); break;
       case 'check-updates': checkForUpdates(); break;
+      case 'uninstall-ask': uninstallAsk = true; render(true); break;
+      case 'uninstall-cancel': uninstallAsk = false; render(true); break;
+      case 'uninstall-do': uninstallAsk = false; act({ type: 'uninstall' }); render(true); break;
       case 'pair-start': act({ type: 'pair_start' }); break;
       case 'pair-search': act({ type: 'pair_search' }); break;
       case 'pair-pick': act({ type: 'pair_pick', address: a }); break;

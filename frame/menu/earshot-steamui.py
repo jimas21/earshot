@@ -86,6 +86,7 @@ VERSIONS_FILE = os.path.join(INSTALL_ROOT, "versions.json")
 PACKAGE_DIR = os.path.join(INSTALL_ROOT, "frame")   # the installed frame package: VERSION and TETHER_VERSION
 UPDATE_STATUS_FILE = os.path.join(STATE_DIR, "update.json")
 UPDATE_UNIT = "earshot-update"
+UNINSTALL_UNIT = "earshot-uninstall"
 AUTO_UPDATE_FIRST = 10 * 60
 AUTO_UPDATE_EVERY = 6 * 60 * 60
 
@@ -2600,6 +2601,28 @@ class Helper:
 
     def a_check_updates(self, a):
         self.start_update()
+
+    def a_uninstall(self, a):
+        """Settings > Uninstall Earshot, after the menu's own confirm step. The signed installer's --uninstall
+        runs in its own user unit, because it stops this service and removes the Phone tab. Settings are kept,
+        as with the Uninstall-Earshot download."""
+        if not os.path.isfile(self.updater):
+            self.write_update_status("failed", "Could not uninstall: the Earshot installer is missing. "
+                                               "Use Uninstall-Earshot from the Earshot page instead.")
+            return
+        python = shutil.which("python3") or "/usr/bin/python3"
+        self.write_update_status("uninstalling", "Removing Earshot...")
+
+        def started(rc, out, err):
+            if rc != 0:
+                self.write_update_status("failed", "Could not uninstall: " + (trim(err, 160) or "systemd-run exited %s" % rc))
+
+        def run():
+            self.exec.run(["systemd-run", "--user", "--quiet", "--collect", "--unit=" + UNINSTALL_UNIT,
+                           "--property=UnsetEnvironment=LD_LIBRARY_PATH LD_PRELOAD",
+                           python, "-I", self.updater, "--uninstall"], started, timeout=20)
+
+        self.exec.run(["systemctl", "--user", "reset-failed", UNINSTALL_UNIT], lambda *_: run(), timeout=10)
 
     # ----- updates -----
 

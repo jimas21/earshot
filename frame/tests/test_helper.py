@@ -996,6 +996,28 @@ class SetupAndUpdateTests(unittest.TestCase):
         rig.helper.read_update_status()
         self.assertTrue(rig.pump(lambda: rig.state()["update"]["status"]["message"] == "Updating Earshot to 0.2.0", 2))
 
+    def test_uninstall_runs_the_installer_in_its_own_unit(self):
+        rig = Rig(self)
+        with open(rig.updater, "w") as f:
+            f.write("# fake installer")
+        rig.start()
+        rig.action(type="uninstall")
+        self.assertTrue(rig.pump(lambda: rig.spawn.of("systemd-run"), 2))
+        run = rig.spawn.of("systemd-run")[0]
+        self.assertIn("--unit=earshot-uninstall", run)
+        self.assertIn("--user", run)
+        self.assertEqual(run[-2:], [rig.updater, "--uninstall"])   # settings kept, as with the download
+        self.assertNotIn("--purge", run)
+        self.assertNotIn("sudo", " ".join(run))
+        self.assertTrue(rig.pump(lambda: (rig.state()["update"]["status"] or {}).get("state") == "uninstalling", 2))
+
+    def test_uninstall_without_installer_says_so(self):
+        rig = Rig(self)
+        rig.start()
+        rig.action(type="uninstall")
+        self.assertTrue(rig.pump(lambda: (rig.state()["update"]["status"] or {}).get("state") == "failed", 2))
+        self.assertEqual(rig.spawn.of("systemd-run"), [])
+
     def test_update_without_installer_says_so(self):
         rig = Rig(self)
         rig.start()
