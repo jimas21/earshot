@@ -2641,9 +2641,9 @@ class Helper:
 
     @staticmethod
     def clean_version(text):
-        """A release tag or version file as a plain version: earshot-v0.1.0 and v0.3.5 -> 0.1.0 and 0.3.5."""
+        """A release tag or version file as a plain version: e0.1.0 and v0.3.5 -> 0.1.0 and 0.3.5."""
         text = str(text).strip()[:30]
-        for prefix in ("earshot-v", "earshot-", "v", "V"):
+        for prefix in ("earshot-v", "e", "E", "v", "V"):
             if text.startswith(prefix) and text[len(prefix):len(prefix) + 1].isdigit():
                 return text[len(prefix):]
         return text
@@ -2656,11 +2656,10 @@ class Helper:
             return ""
 
     def about_version(self):
-        """"Earshot 0.1.0 · Tether 0.3.5". The Tether half is left out when the package has no TETHER_VERSION."""
+        """("Earshot 0.1.0", "Tether 0.3.5"). Either is "" when unknown: no TETHER_VERSION file, no crash."""
         earshot = self.read_package_file("VERSION") or self.clean_version(self.installed_versions().get("frame", ""))
         tether = self.read_package_file("TETHER_VERSION")
-        parts = (["Earshot " + earshot] if earshot else []) + (["Tether " + tether] if tether else [])
-        return " · ".join(parts)
+        return ("Earshot " + earshot if earshot else "", "Tether " + tether if tether else "")
 
     def tick_update(self):
         self.update_timer = None
@@ -2831,7 +2830,7 @@ class Helper:
             "quick_replies": [trim(r, 120) for r in self.settings.get("quick_replies")],
             "apps": self.apps_view(),
             "settings": {k: self.settings.get(k) for k in ("priority", "alerts", "preview", "auto_update")},
-            "update": {"status": status, "versions": self.installed_versions(), "about": self.about_version()},
+            "update": {"status": status, "versions": self.installed_versions(), "about": self.about_version()[0], "about_base": self.about_version()[1]},
             "unread": sum(int(t["unread"] or 0) for t in threads),
         }
 

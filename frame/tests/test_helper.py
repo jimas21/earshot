@@ -1008,16 +1008,16 @@ class SetupAndUpdateTests(unittest.TestCase):
         pkg = os.path.join(rig.tmp, "pkg")
         os.makedirs(pkg)
         with open(os.path.join(pkg, "VERSION"), "w") as f:
-            f.write("earshot-v0.1.0\n")
+            f.write("e0.1.0\n")
         with open(os.path.join(pkg, "TETHER_VERSION"), "w") as f:
             f.write("0.3.5\n")
         rig.start()
         rig.helper.package_dir = pkg
-        self.assertEqual(rig.helper.about_version(), "Earshot 0.1.0 · Tether 0.3.5")
+        self.assertEqual(rig.helper.about_version(), ("Earshot 0.1.0", "Tether 0.3.5"))
         os.remove(os.path.join(pkg, "TETHER_VERSION"))
-        self.assertEqual(rig.helper.about_version(), "Earshot 0.1.0")
+        self.assertEqual(rig.helper.about_version(), ("Earshot 0.1.0", ""))
         os.remove(os.path.join(pkg, "VERSION"))
-        self.assertEqual(rig.helper.about_version(), "")
+        self.assertEqual(rig.helper.about_version(), ("", ""))
 
     def test_versions_file_is_passed_on(self):
         rig = Rig(self)
