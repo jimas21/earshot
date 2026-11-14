@@ -133,7 +133,9 @@ namespace tether::bluetooth {
         pbap_path_.clear();
         map_retried_ = false;
         pbap_retried_ = false;
-        next_attempt_ = 0;
+        // A phone that flaps must not turn the slow wait for a missing obexd into a retry on every reconnect.
+        if (!waiting_for_obexd_)
+            next_attempt_ = 0;
         status_.map_open = false;
         status_.pbap_open = false;
     }
@@ -176,8 +178,8 @@ namespace tether::bluetooth {
         }
     }
 
-    bool
-        ProfileSupervisor::open_profile(const std::string& target, std::string& path, ObexError& error, bool& retried) {
+    bool ProfileSupervisor::open_profile(
+        const std::string& target, std::string& path, ObexError& error, bool& retried, bool& no_daemon_logged) {
         std::string err;
         // create_session() clears `path` on failure, so the session that may need
         // dropping has to be captured before the call.
@@ -186,10 +188,24 @@ namespace tether::bluetooth {
         if (!path.empty()) {
             error = ObexError::None;
             retried = false;
+            no_daemon_logged = false;
             return true;
         }
 
         error = classify_obex_error(err);
+        if (error == ObexError::NoDaemon) {
+            // The same words every time until obexd is installed: say it once.
+            if (!no_daemon_logged) {
+                no_daemon_logged = true;
+                debug::log(WARN,
+                           "bluetooth: {} session failed ({}): {}. Not logging this again until it changes.",
+                           target,
+                           to_string(error),
+                           err);
+            }
+            return false;
+        }
+        no_daemon_logged = false;
         debug::log(WARN, "bluetooth: {} session failed ({}): {}", target, to_string(error), err);
 
         // A stale session from a previous run can present as Forbidden. Drop only
@@ -218,14 +234,32 @@ namespace tether::bluetooth {
         const bool map_done = status_.map_open || status_.map_held;
         const bool pbap_done = status_.pbap_open || status_.pbap_held;
 
+        // Waiting out a missing obexd: the bus says when it shows up, so look there instead of retrying.
+        if (waiting_for_obexd_ && now >= next_bus_check_) {
+            next_bus_check_ = now + PROFILE_BUS_WATCH_SECONDS;
+            if (ops_.obex_service_present()) {
+                debug::log(INFO, "bluetooth: org.bluez.obex appeared on the session bus, opening sessions");
+                next_attempt_ = now;
+            }
+        }
+
         if ((!map_done || !pbap_done) && now >= next_attempt_) {
             if (!map_done)
-                status_.map_open = open_profile("map", map_path_, status_.map_error, map_retried_);
+                status_.map_open =
+                    open_profile("map", map_path_, status_.map_error, map_retried_, map_no_daemon_logged_);
             if (!pbap_done)
-                status_.pbap_open = open_profile("pbap", pbap_path_, status_.pbap_error, pbap_retried_);
+                status_.pbap_open =
+                    open_profile("pbap", pbap_path_, status_.pbap_error, pbap_retried_, pbap_no_daemon_logged_);
             if (status_.map_open || status_.pbap_open)
                 opened_once_ = true;
-            next_attempt_ = now + (opened_once_ ? PROFILE_STEADY_POLL_SECONDS : PROFILE_INITIAL_POLL_SECONDS);
+            const bool map_missing_obexd = status_.map_open || status_.map_held || status_.map_error == ObexError::NoDaemon;
+            const bool pbap_missing_obexd =
+                status_.pbap_open || status_.pbap_held || status_.pbap_error == ObexError::NoDaemon;
+            const bool nothing_open = !status_.map_open && !status_.pbap_open;
+            waiting_for_obexd_ = nothing_open && map_missing_obexd && pbap_missing_obexd;
+            if (waiting_for_obexd_)
+                next_bus_check_ = now + PROFILE_BUS_WATCH_SECONDS;
+            next_attempt_ = now + profile_retry_seconds(opened_once_, waiting_for_obexd_);
         }
 
         if (status_.map_held || status_.pbap_held) {

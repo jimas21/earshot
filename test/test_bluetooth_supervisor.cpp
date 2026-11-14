@@ -111,6 +111,14 @@ namespace {
         }
 
         void remove_session(const std::string& path) override { removed.push_back(path); }
+
+        // Whether obexd has shown up on the bus; only the missing-daemon cases care.
+        bool obex_present = false;
+        int bus_checks = 0;
+        bool obex_service_present() override {
+            ++bus_checks;
+            return obex_present;
+        }
     };
 
 } // namespace
@@ -626,6 +634,86 @@ TEST(ProfileSupervisor, OpensBothSessionsWhenTheDeviceIsReady) {
     EXPECT_TRUE(sup.status().pbap_open);
     EXPECT_FALSE(sup.map_session().empty());
     EXPECT_FALSE(sup.pbap_session().empty());
+}
+
+// obexd is not installed: the same refusal every time. Retrying every few seconds forever only fills the log, so
+// the retries become rare and the bus is watched instead.
+namespace {
+    const char* const NO_OBEXD =
+        "GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.bluez.obex was not provided by any "
+        ".service files";
+}
+
+TEST(ProfileSupervisor, BacksOffHardWhileObexdIsMissing) {
+    FakeProfiles ops;
+    ops.map_error = NO_OBEXD;
+    ops.pbap_error = NO_OBEXD;
+    ProfileSupervisor sup(ops);
+
+    sup.tick(0, true);
+    EXPECT_EQ(sup.status().map_error, ObexError::NoDaemon);
+    EXPECT_EQ(ops.map_attempts, 1);
+    for (int64_t now = 1; now < PROFILE_NO_DAEMON_POLL_SECONDS; ++now)
+        sup.tick(now, true);
+    EXPECT_EQ(ops.map_attempts, 1) << "retried while obexd is still absent";
+    EXPECT_EQ(ops.pbap_attempts, 1);
+
+    sup.tick(PROFILE_NO_DAEMON_POLL_SECONDS, true);
+    EXPECT_EQ(ops.map_attempts, 2);
+    EXPECT_EQ(ops.pbap_attempts, 2);
+}
+
+TEST(ProfileSupervisor, NoticesObexdAppearingOnTheBusAtOnce) {
+    FakeProfiles ops;
+    ops.map_error = NO_OBEXD;
+    ops.pbap_error = NO_OBEXD;
+    ProfileSupervisor sup(ops);
+
+    sup.tick(0, true);
+    for (int64_t now = 1; now < 60; ++now)
+        sup.tick(now, true);
+    EXPECT_EQ(ops.map_attempts, 1);
+    EXPECT_GT(ops.bus_checks, 0);
+    EXPECT_LT(ops.bus_checks, 20) << "the bus watch should be a few seconds apart, not every tick";
+
+    ops.map_error.clear();
+    ops.pbap_error.clear();
+    ops.obex_present = true;
+    sup.tick(60, true);
+    sup.tick(60 + PROFILE_BUS_WATCH_SECONDS, true);
+    EXPECT_TRUE(sup.status().map_open);
+    EXPECT_TRUE(sup.status().pbap_open);
+}
+
+// A link that flaps must not turn the slow wait back into a retry per reconnect.
+TEST(ProfileSupervisor, ResetDoesNotCancelTheWaitForObexd) {
+    FakeProfiles ops;
+    ops.map_error = NO_OBEXD;
+    ops.pbap_error = NO_OBEXD;
+    ProfileSupervisor sup(ops);
+
+    sup.tick(0, true);
+    for (int64_t now = 1; now < 30; ++now) {
+        sup.reset();
+        sup.tick(now, true);
+    }
+    EXPECT_EQ(ops.map_attempts, 1);
+}
+
+// Only the no-daemon case is slow: any other failure keeps the usual cadence.
+TEST(ProfileSupervisor, OtherFailuresKeepTheFastCadence) {
+    EXPECT_EQ(profile_retry_seconds(false, false), PROFILE_INITIAL_POLL_SECONDS);
+    EXPECT_EQ(profile_retry_seconds(true, false), PROFILE_STEADY_POLL_SECONDS);
+    EXPECT_EQ(profile_retry_seconds(false, true), PROFILE_NO_DAEMON_POLL_SECONDS);
+    EXPECT_EQ(profile_retry_seconds(true, true), PROFILE_NO_DAEMON_POLL_SECONDS);
+
+    FakeProfiles ops;
+    ops.map_error = "Forbidden";
+    ops.pbap_error = NO_OBEXD;
+    ProfileSupervisor sup(ops);
+    sup.tick(0, true);
+    sup.tick(PROFILE_INITIAL_POLL_SECONDS, true);
+    EXPECT_GE(ops.pbap_attempts, 2) << "a phone-side refusal alongside must not slow the retry";
 }
 
 TEST(ProfileSupervisor, DoesNothingUntilTheDeviceIsReady) {

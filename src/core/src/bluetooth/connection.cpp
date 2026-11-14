@@ -663,6 +663,31 @@ namespace tether::bluetooth {
                 return session;
             }
 
+            bool obex_service_present() override {
+                std::string err;
+                if (!ensure_connection(err))
+                    return false;
+                GError* error = nullptr;
+                GVariant* reply = g_dbus_connection_call_sync(conn_,
+                                                              "org.freedesktop.DBus",
+                                                              "/org/freedesktop/DBus",
+                                                              "org.freedesktop.DBus",
+                                                              "NameHasOwner",
+                                                              g_variant_new("(s)", OBEX_NAME),
+                                                              G_VARIANT_TYPE("(b)"),
+                                                              G_DBUS_CALL_FLAGS_NONE,
+                                                              2000,
+                                                              nullptr,
+                                                              &error);
+                g_clear_error(&error);
+                if (!reply)
+                    return false;
+                gboolean owned = FALSE;
+                g_variant_get(reply, "(b)", &owned);
+                g_variant_unref(reply);
+                return owned;
+            }
+
             void remove_session(const std::string& path) override {
                 if (path.empty() || !conn_)
                     return;
