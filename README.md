@@ -17,13 +17,12 @@ No Mac and no app on the phone are needed. **No password, no root and no system 
 installs and runs as your normal user, on the Frame's stock Bluetooth, the way the Tragus earbuds
 app does.
 
-Status: building v1. See [frame/PLAN.md](frame/PLAN.md), [frame/SPEC-v1.md](frame/SPEC-v1.md) and
+Status: 0.1.0 brings notifications, texts with replies and contacts. Calls come later. See [frame/PLAN.md](frame/PLAN.md), [frame/SPEC-v1.md](frame/SPEC-v1.md) and
 [frame/TESTS.md](frame/TESTS.md).
 
 ## Install on the Steam Frame
 
-**Not released yet.** The button does nothing until the first signed release is published; this
-is what it will do. There is no password to enter and nothing to type.
+There is no password to enter and nothing to type.
 
 1. In a web browser on the headset, open this page and press the button:
 
@@ -36,7 +35,7 @@ is what it will do. There is no password to enter and nothing to type.
 4. Open the quick menu, choose **Phone**, then tap **Pair iPhone**. Earshot makes the headset
    visible; on the iPhone open Settings > Bluetooth and tap the headset, then compare the code
    shown in the Phone tab and tap Confirm. Finally switch on the permissions the tab lists
-   (Show Notifications, and Messages and Contacts when the iPhone offers them).
+   (Share System Notifications, Show Notifications and Sync Contacts).
 
 Do not pair in the Frame's own Bluetooth settings: a bond made that way cannot carry
 notifications. Pairing from the Phone tab always works from the iPhone's side, which is the one
