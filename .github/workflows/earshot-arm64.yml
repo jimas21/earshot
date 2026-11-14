@@ -188,7 +188,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build g++ make pkg-config git ca-certificates \
-            libssl-dev libglib2.0-dev libdbus-1-dev libical-dev gettext patchelf file binutils curl xz-utils
+            libssl-dev libglib2.0-dev libdbus-1-dev libical-dev dbus gettext patchelf file binutils curl xz-utils
           uname -m
           ldd --version | head -n1
           g++ --version | head -n1
@@ -370,6 +370,15 @@ jobs:
           "${d}/tether" --version | tee -a "${report}"
           ob="$("${d}/obexd" --help 2>&1)" || fail "obexd --help failed: ${ob}"
           head -n3 <<<"${ob}" | tee -a "${report}"
+          # Start it exactly as earshot-obexd.service does, on a private session bus: it must still be
+          # running after 3 s (a bad -P list makes it exit at once with "obex_server_init failed").
+          oflags="$(sed -n 's#^ExecStart=%h/.local/share/earshot/engine/obexd ##p' frame/install/earshot-obexd.service)"
+          [ -n "${oflags}" ] || fail "could not read obexd's flags from earshot-obexd.service"
+          rc=0
+          # shellcheck disable=SC2086  # the unit's flags, split into words as systemd does
+          timeout 3 dbus-run-session -- "${d}/obexd" ${oflags} > "${RUNNER_TEMP}/obexd-run.log" 2>&1 || rc=$?
+          echo "obexd with the unit's flags (${oflags}): exit ${rc} after 3 s (124 = still running)" | tee -a "${report}"
+          [ "${rc}" = 124 ] || { cat "${RUNNER_TEMP}/obexd-run.log"; fail "obexd does not stay up with the unit's flags"; }
           readelf -d "${d}/obexd" | grep -q 'Shared library: \[libical' || fail "obexd does not link libical"
           {
             echo "### Earshot engine (aarch64, headless)"

@@ -123,8 +123,14 @@ class UnitFileTests(unittest.TestCase):
         self.assertEqual(len(exec_start), 1)
         self.assertTrue(exec_start[0].startswith("ExecStart=%h/.local/share/earshot/engine/obexd "))
         self.assertIn(" -n", exec_start[0])  # stay in the foreground for systemd
-        # never offers incoming OBEX file transfer: the server transport plugins are off
-        self.assertIn("-P bluetooth,", exec_start[0])
+        # never offers incoming OBEX file transfer or the headset's own phonebook/messages
+        plugins = exec_start[0].split(" -P ", 1)[1].split()[0].split(",")
+        for off in ("opp", "ftp", "irmc", "pbap", "mas"):
+            self.assertIn(off, plugins)
+        # the Bluetooth transport and MAP's notification server must stay: without the transport
+        # obexd exits at start ("obex_server_init failed"), without mns no new-text reports
+        self.assertNotIn("bluetooth", plugins)
+        self.assertNotIn("mns", plugins)
         # only starts when nobody else owns org.bluez.obex on the session bus
         cond = [l for l in s["Service"] if l.startswith("ExecCondition=")]
         self.assertEqual(len(cond), 1)
