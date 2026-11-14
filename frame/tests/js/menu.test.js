@@ -393,6 +393,14 @@ test('not set up yet: says what is wrong in plain words, never a command, keeps 
   assert.match(text(p), /Show iPhone notifications in the headset/);
 });
 
+test('settings show the Earshot and Tether versions when the helper sends them', () => {
+  const p = openPopup();
+  p.w.__earshotMenu.setState(Object.assign({}, BASE, { update: Object.assign({}, BASE.update, { about: 'Earshot 0.1.0', about_base: 'Tether 0.3.5' }) }));
+  click(p, byAct(p, 'tab', 'settings'));
+  assert.match(text(p), /Earshot 0\.1\.0/);
+  assert.match(text(p), /Tether 0\.3\.5/);
+});
+
 test('settings send their actions', () => {
   const p = openPopup();
   p.w.__earshotMenu.setState(BASE);

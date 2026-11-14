@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 16:29-0800\n"
+"POT-Creation-Date: 2026-11-13 17:15-0800\n"
 "PO-Revision-Date: 2026-08-23\n"
 "Last-Translator: Tether project\n"
 "Language-Team: Japanese\n"
@@ -1566,16 +1566,6 @@ msgstr ""
 "何度試しても BR/EDR のみのペアリングになる場合、このコントローラは BR/EDR の "
 "Secure Connections に対応していない可能性があります。tether --bt-adapter {} "
 "で別のコントローラに切り替えて、もう一度ペアリングしてください。"
-
-#: src/core/src/bluetooth/objects.cpp
-msgid ""
-"This adapter does not present itself as A/V Hands-Free. Changing that needs "
-"administrator rights, so it is left alone. If the iPhone does not offer "
-"Messages or Contacts, that is why."
-msgstr ""
-"このアダプタは A/V ハンズフリー (Hands-Free) として認識されません。変更には管"
-"理者権限が必要なため、そのままにしています。iPhone にメッセージや連絡先が表示"
-"されない場合は、これが原因です。"
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -3389,6 +3379,15 @@ msgstr "デバイスをペアリングし、ネットワーク越しにクリッ
 #: src/gtk/tether-gtk.desktop.in
 msgid "iPhone;iOS;SMS;Messages;Clipboard;Files;Notifications;Calls;AirPods;"
 msgstr "iPhone;iOS;SMS;メッセージ;クリップボード;ファイル;通知;通話;AirPods;"
+
+#~ msgid ""
+#~ "This adapter does not present itself as A/V Hands-Free. Changing that "
+#~ "needs administrator rights, so it is left alone. If the iPhone does not "
+#~ "offer Messages or Contacts, that is why."
+#~ msgstr ""
+#~ "このアダプタは A/V ハンズフリー (Hands-Free) として認識されません。変更に"
+#~ "は管理者権限が必要なため、そのままにしています。iPhone にメッセージや連絡"
+#~ "先が表示されない場合は、これが原因です。"
 
 #~ msgid ""
 #~ "Connected. BlueZ is not exposing an LE bearer, so notifications are "

@@ -83,6 +83,7 @@ MAP_APP_ID = "com.apple.MobileSMS"  # Tether leaves ANCS "Messages" alone: MAP c
 
 UPDATER = os.path.join(INSTALL_ROOT, "earshot-frame-install.py")
 VERSIONS_FILE = os.path.join(INSTALL_ROOT, "versions.json")
+PACKAGE_DIR = os.path.join(INSTALL_ROOT, "frame")   # the installed frame package: VERSION and TETHER_VERSION
 UPDATE_STATUS_FILE = os.path.join(STATE_DIR, "update.json")
 UPDATE_UNIT = "earshot-update"
 AUTO_UPDATE_FIRST = 10 * 60
@@ -1801,12 +1802,6 @@ class Pairing:
 
     # ----- what the page draws -----
 
-    def map_on_offer(self):
-        """Message Access can work here: it is open, or the iPhone refused it (so the switch exists on the phone).
-        Missing obexd, a headset the iPhone does not treat as a car kit, or no answer at all mean it cannot."""
-        c = self.h.conn
-        return bool(c.get("map_open")) or c.get("map_error") in ("forbidden", "busy")
-
     def checklist(self):
         c, weak = self.h.conn, bool(self.s.get("weak"))
 
@@ -1826,25 +1821,16 @@ class Pairing:
             n_state, n_note = "off", "This pairing cannot carry notifications."
         notifications = {"id": "notifications", "label": "Share System Notifications", "state": n_state,
                          "note": n_note, "essential": not weak}
-        # The iPhone only shows its Messages, Contacts, Favorites and Recents switches to a device it treats as a
-        # car kit. When Message Access is not on offer at all, listing those switches sends people looking for
-        # settings that are not there: say plainly that replies are not available instead.
-        if not self.map_on_offer():
-            return [notifications,
-                    {"id": "messages", "label": "Replying to texts", "state": "off",
-                     "note": "Not available on this headset yet. Texts still show up as notifications.",
-                     "essential": False}]
-        m_state, m_note = perm(c.get("map_open"), c.get("map_error"), "Needs Show Notifications and Sync Contacts.")
+        # Message Access (texts, replies) and Contacts are the iPhone's Show Notifications and Sync Contacts switches.
+        # Without Message Access the headset can neither read nor answer texts.
+        m_state, m_note = perm(c.get("map_open"), c.get("map_error"),
+                               "Texts cannot be read or answered until the iPhone allows message access.")
         p_state, p_note = perm(c.get("pbap_open"), c.get("pbap_error"))
-        recents = bool(self.h.call_history)
         return [
             notifications,
-            {"id": "messages", "label": "Text messages", "state": m_state, "note": m_note, "essential": True},
+            {"id": "messages", "label": "Show Notifications", "state": m_state, "note": m_note,
+             "essential": c.get("map_error") not in ("no_daemon", "no_record")},
             {"id": "contacts", "label": "Sync Contacts", "state": p_state, "note": p_note, "essential": False},
-            {"id": "favorites", "label": "Phone Favorites", "state": "unknown",
-             "note": "Turn it on. Earshot cannot check this one.", "essential": False},
-            {"id": "recents", "label": "Phone Recents", "state": "on" if recents else "unknown",
-             "note": "Working." if recents else "Turn it on. Earshot cannot check this one.", "essential": False},
         ]
 
     def view(self):
@@ -1887,7 +1873,7 @@ class Pairing:
 class Helper:
     def __init__(self, loop=None, settings=None, connect_tether=connect_unix, executor=None,
                  menu_file=MENU_FILE, cdp_base=CDP_BASE, http_get=http_get_json, ws_factory=WsClient,
-                 vrcmd=VRCMD, notifier=None, updater=UPDATER, status_file=UPDATE_STATUS_FILE, versions_file=VERSIONS_FILE,
+                 vrcmd=VRCMD, notifier=None, updater=UPDATER, status_file=UPDATE_STATUS_FILE, versions_file=VERSIONS_FILE, package_dir=PACKAGE_DIR,
                  settings_path=None, apps_path=None, scan=scan_processes, burst_window=8.0, push_delay=0.15,
                  tether_backoff=(1.0, 30.0), presence_every=10.0, send_timeout=45.0,
                  settle_seconds=5.0, auto_update_first=AUTO_UPDATE_FIRST, clock=None, exists=os.path.exists):
@@ -1901,6 +1887,7 @@ class Helper:
         self.updater = updater
         self.status_file = status_file
         self.versions_file = versions_file
+        self.package_dir = package_dir
         self.push_delay = push_delay
         self.presence_every = presence_every
         self.send_timeout = send_timeout
@@ -2652,6 +2639,28 @@ class Helper:
             return {}
         return {str(k)[:30]: str(v)[:30] for k, v in data.items()} if isinstance(data, dict) else {}
 
+    @staticmethod
+    def clean_version(text):
+        """A release tag or version file as a plain version: e0.1.0 and v0.3.5 -> 0.1.0 and 0.3.5."""
+        text = str(text).strip()[:30]
+        for prefix in ("earshot-v", "e", "E", "v", "V"):
+            if text.startswith(prefix) and text[len(prefix):len(prefix) + 1].isdigit():
+                return text[len(prefix):]
+        return text
+
+    def read_package_file(self, name):
+        try:
+            with open(os.path.join(self.package_dir, name), "r", encoding="utf-8") as f:
+                return self.clean_version(f.read(64))
+        except (OSError, ValueError):
+            return ""
+
+    def about_version(self):
+        """("Earshot 0.1.0", "Tether 0.3.5"). Either is "" when unknown: no TETHER_VERSION file, no crash."""
+        earshot = self.read_package_file("VERSION") or self.clean_version(self.installed_versions().get("frame", ""))
+        tether = self.read_package_file("TETHER_VERSION")
+        return ("Earshot " + earshot if earshot else "", "Tether " + tether if tether else "")
+
     def tick_update(self):
         self.update_timer = None
         if self.stopping:
@@ -2821,7 +2830,7 @@ class Helper:
             "quick_replies": [trim(r, 120) for r in self.settings.get("quick_replies")],
             "apps": self.apps_view(),
             "settings": {k: self.settings.get(k) for k in ("priority", "alerts", "preview", "auto_update")},
-            "update": {"status": status, "versions": self.installed_versions()},
+            "update": {"status": status, "versions": self.installed_versions(), "about": self.about_version()[0], "about_base": self.about_version()[1]},
             "unread": sum(int(t["unread"] or 0) for t in threads),
         }
 

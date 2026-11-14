@@ -1144,9 +1144,10 @@ TEST(Capability, NoRootModeOffersNoSetupStepsAndStaysFull) {
     EXPECT_EQ(cap.mode, DeliveryMode::Full);
     EXPECT_FALSE(cap.class_ok);
     EXPECT_TRUE(cap.ertm_disabled);
-    // class and ERTM are explained, never prescribed
-    EXPECT_GE(cap.reasons.size(), 2u);
+    // ERTM is explained, never prescribed; the class is not blamed for missing Messages or Contacts
+    EXPECT_GE(cap.reasons.size(), 1u);
     for (const auto& reason : cap.reasons) {
+        EXPECT_EQ(reason.find("Hands-Free"), std::string::npos) << reason;
         EXPECT_EQ(reason.find("sudo"), std::string::npos) << reason;
         EXPECT_EQ(reason.find("btmgmt"), std::string::npos) << reason;
     }

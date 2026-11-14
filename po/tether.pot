@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: tether 0.3.5\n"
 "Report-Msgid-Bugs-To: zack@bartel.com\n"
-"POT-Creation-Date: 2026-11-13 16:29-0800\n"
+"POT-Creation-Date: 2026-11-13 17:15-0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1398,13 +1398,6 @@ msgid ""
 "If every attempt gives a BR/EDR-only bond, this controller may not support "
 "Secure Connections on BR/EDR; try another with tether --bt-adapter {} and "
 "pair again."
-msgstr ""
-
-#: src/core/src/bluetooth/objects.cpp
-msgid ""
-"This adapter does not present itself as A/V Hands-Free. Changing that needs "
-"administrator rights, so it is left alone. If the iPhone does not offer "
-"Messages or Contacts, that is why."
 msgstr ""
 
 #: src/core/src/bluetooth/objects.cpp
