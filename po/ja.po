@@ -1474,6 +1474,8 @@ msgid ""
 "Running without BlueZ's experimental mode. Notifications work when the "
 "iPhone itself starts the pairing and reconnects."
 msgstr ""
+"BlueZ の実験モードなしで動作しています。通知は、iPhone 自身がペアリングを開始"
+"して再接続したときに機能します。"
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1507,6 +1509,9 @@ msgid ""
 "Bluetooth on the iPhone and check Show Notifications for this device. If it "
 "never appears, forget this device on the iPhone and pair again."
 msgstr ""
+"iPhone はペアリング済みですが、まだ通知が提供されていません。iPhone で 設定 "
+"> Bluetooth を開き、このデバイスの「通知を表示」をオンにしてください。表示さ"
+"れない場合は、iPhone でこのデバイスを削除し、もう一度ペアリングしてください。"
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1560,6 +1565,9 @@ msgid ""
 "administrator rights, so it is left alone. If the iPhone does not offer "
 "Messages or Contacts, that is why."
 msgstr ""
+"このアダプタは A/V ハンズフリー (Hands-Free) として認識されません。変更には管"
+"理者権限が必要なため、そのままにしています。iPhone にメッセージや連絡先が表示"
+"されない場合は、これが原因です。"
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1575,6 +1583,9 @@ msgid ""
 "Contacts may fail to open. Turning it back on needs administrator rights, so "
 "it is left alone."
 msgstr ""
+"カーネルで L2CAP ERTM が無効になっています (bluetooth.disable_ertm)。メッセー"
+"ジと連絡先を開けないことがあります。再び有効にするには管理者権限が必要なた"
+"め、そのままにしています。"
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1692,27 +1703,27 @@ msgstr "{} とペアリングしました。"
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid "An iPhone"
-msgstr ""
+msgstr "iPhone"
 
 #: src/core/src/bluetooth/pairing.cpp
-#, fuzzy
 msgid "Stopped waiting for the iPhone."
-msgstr "iPhone を待っています。"
+msgstr "iPhone の待機を終了しました。"
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid ""
 "The iPhone connected but pairing did not finish. Keep it unlocked on "
 "Settings > Bluetooth and try again."
 msgstr ""
+"iPhone は接続しましたが、ペアリングが完了しませんでした。設定 > Bluetooth で"
+"ロックを解除したままにして、もう一度お試しください。"
 
 #: src/core/src/bluetooth/pairing.cpp
-#, fuzzy
 msgid ""
 "Nobody connected. On the iPhone, open Settings > Bluetooth and tap this "
 "device."
 msgstr ""
-"iPhone が見つかりません。iPhone のロックを解除し、設定 > Bluetooth を開いてア"
-"ドバタイズさせてから、もう一度検索してください。"
+"誰も接続しませんでした。iPhone で 設定 > Bluetooth を開き、このデバイスをタッ"
+"プしてください。"
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid "No Bluetooth adapter is present."
@@ -1723,15 +1734,14 @@ msgid "BlueZ refused to start scanning."
 msgstr "BlueZ がスキャンの開始を拒否しました。"
 
 #: src/core/src/bluetooth/pairing.cpp
-#, fuzzy
 msgid ""
 "BlueZ is holding a discovery session that never ended, so scanning cannot "
 "start. Turn Bluetooth off and on again in the system settings, or restart "
 "the device, and try again."
 msgstr ""
 "終了しなかった検出セッションを BlueZ が保持しているため、スキャンを開始できま"
-"せん。Bluetooth サービスを再起動し (sudo systemctl restart bluetooth)、もう一"
-"度お試しください。"
+"せん。システム設定で Bluetooth をオフにしてからオンにするか、デバイスを再起動"
+"して、もう一度お試しください。"
 
 #: src/core/src/bluetooth/pairing.cpp
 #, c++-format
@@ -1936,9 +1946,8 @@ msgid "Not an AirPods device."
 msgstr "AirPods ではありません。"
 
 #: src/core/src/net.cpp
-#, fuzzy
 msgid "The network listener is turned off on this machine."
-msgstr "このマシンでは Bluetooth を利用できません。"
+msgstr "このマシンではネットワークリスナーがオフになっています。"
 
 #: src/core/src/net.cpp
 msgid "Unknown listening mode."

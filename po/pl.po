@@ -1493,6 +1493,8 @@ msgid ""
 "Running without BlueZ's experimental mode. Notifications work when the "
 "iPhone itself starts the pairing and reconnects."
 msgstr ""
+"BlueZ działa bez trybu eksperymentalnego. Powiadomienia działają, gdy iPhone "
+"sam rozpoczyna parowanie i łączy się ponownie."
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1527,6 +1529,10 @@ msgid ""
 "Bluetooth on the iPhone and check Show Notifications for this device. If it "
 "never appears, forget this device on the iPhone and pair again."
 msgstr ""
+"iPhone jest sparowany, ale nie zaoferował jeszcze powiadomień. Na iPhonie "
+"otwórz Ustawienia > Bluetooth i zaznacz Pokaż powiadomienia dla tego "
+"urządzenia. Jeśli nigdy się nie pojawi, zapomnij to urządzenie na iPhonie i "
+"sparuj ponownie."
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1581,6 +1587,9 @@ msgid ""
 "administrator rights, so it is left alone. If the iPhone does not offer "
 "Messages or Contacts, that is why."
 msgstr ""
+"Ten adapter nie przedstawia się jako zestaw głośnomówiący A/V (Hands-Free). "
+"Zmiana wymaga uprawnień administratora, więc pozostaje bez zmian. Jeśli "
+"iPhone nie oferuje Wiadomości ani Kontaktów, to jest przyczyna."
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1596,6 +1605,9 @@ msgid ""
 "Contacts may fail to open. Turning it back on needs administrator rights, so "
 "it is left alone."
 msgstr ""
+"W jądrze wyłączono L2CAP ERTM (bluetooth.disable_ertm). Wiadomości i "
+"Kontakty mogą się nie otworzyć. Ponowne włączenie wymaga uprawnień "
+"administratora, więc pozostaje bez zmian."
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1713,27 +1725,27 @@ msgstr "Sparowano z {}."
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid "An iPhone"
-msgstr ""
+msgstr "iPhone"
 
 #: src/core/src/bluetooth/pairing.cpp
-#, fuzzy
 msgid "Stopped waiting for the iPhone."
-msgstr "Oczekiwanie na iPhone'a."
+msgstr "Przestano czekać na iPhone'a."
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid ""
 "The iPhone connected but pairing did not finish. Keep it unlocked on "
 "Settings > Bluetooth and try again."
 msgstr ""
+"iPhone połączył się, ale parowanie nie zostało ukończone. Pozostaw go "
+"odblokowanego w Ustawienia > Bluetooth i spróbuj ponownie."
 
 #: src/core/src/bluetooth/pairing.cpp
-#, fuzzy
 msgid ""
 "Nobody connected. On the iPhone, open Settings > Bluetooth and tap this "
 "device."
 msgstr ""
-"Nie znaleziono iPhone'a. Odblokuj telefon i otwórz Ustawienia > Bluetooth, "
-"aby się rozgłaszał, a potem wyszukaj ponownie."
+"Nikt się nie połączył. Na iPhonie otwórz Ustawienia > Bluetooth i dotknij to "
+"urządzenie."
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid "No Bluetooth adapter is present."
@@ -1744,15 +1756,14 @@ msgid "BlueZ refused to start scanning."
 msgstr "BlueZ odmówił rozpoczęcia skanowania."
 
 #: src/core/src/bluetooth/pairing.cpp
-#, fuzzy
 msgid ""
 "BlueZ is holding a discovery session that never ended, so scanning cannot "
 "start. Turn Bluetooth off and on again in the system settings, or restart "
 "the device, and try again."
 msgstr ""
 "BlueZ utrzymuje sesję wykrywania, która nigdy się nie zakończyła, więc "
-"skanowanie nie może się rozpocząć. Uruchom ponownie usługę Bluetooth (sudo "
-"systemctl restart bluetooth) i spróbuj ponownie."
+"skanowanie nie może się rozpocząć. Wyłącz i ponownie włącz Bluetooth w "
+"ustawieniach systemu albo uruchom urządzenie ponownie, i spróbuj jeszcze raz."
 
 #: src/core/src/bluetooth/pairing.cpp
 #, c++-format
@@ -1955,9 +1966,8 @@ msgid "Not an AirPods device."
 msgstr "To nie jest urządzenie AirPods."
 
 #: src/core/src/net.cpp
-#, fuzzy
 msgid "The network listener is turned off on this machine."
-msgstr "Bluetooth jest niedostępny na tej maszynie."
+msgstr "Nasłuchiwanie sieciowe jest wyłączone na tej maszynie."
 
 #: src/core/src/net.cpp
 msgid "Unknown listening mode."

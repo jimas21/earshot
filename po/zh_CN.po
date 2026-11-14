@@ -1409,6 +1409,8 @@ msgid ""
 "Running without BlueZ's experimental mode. Notifications work when the "
 "iPhone itself starts the pairing and reconnects."
 msgstr ""
+"BlueZ 未启用实验模式运行。当 iPhone 自己发起配对并重新连接时，通知可以正常工"
+"作。"
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1439,6 +1441,8 @@ msgid ""
 "Bluetooth on the iPhone and check Show Notifications for this device. If it "
 "never appears, forget this device on the iPhone and pair again."
 msgstr ""
+"iPhone 已配对，但尚未提供通知。请在 iPhone 上打开 设置 > 蓝牙，并为此设备勾选"
+"“显示通知”。如果一直不出现，请在 iPhone 上忽略此设备并重新配对。"
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1489,6 +1493,8 @@ msgid ""
 "administrator rights, so it is left alone. If the iPhone does not offer "
 "Messages or Contacts, that is why."
 msgstr ""
+"此适配器没有以 A/V 免提 (Hands-Free) 身份出现。更改需要管理员权限，因此保持不"
+"变。如果 iPhone 不提供信息或通讯录，原因就在这里。"
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1504,6 +1510,8 @@ msgid ""
 "Contacts may fail to open. Turning it back on needs administrator rights, so "
 "it is left alone."
 msgstr ""
+"内核已禁用 L2CAP ERTM (bluetooth.disable_ertm)。信息和通讯录可能无法打开。重"
+"新启用需要管理员权限，因此保持不变。"
 
 #: src/core/src/bluetooth/objects.cpp
 msgid ""
@@ -1617,26 +1625,24 @@ msgstr "已与 {} 配对。"
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid "An iPhone"
-msgstr ""
+msgstr "一台 iPhone"
 
 #: src/core/src/bluetooth/pairing.cpp
-#, fuzzy
 msgid "Stopped waiting for the iPhone."
-msgstr "正在等待 iPhone。"
+msgstr "已停止等待 iPhone。"
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid ""
 "The iPhone connected but pairing did not finish. Keep it unlocked on "
 "Settings > Bluetooth and try again."
 msgstr ""
+"iPhone 已连接，但配对未完成。请让它保持解锁并停留在 设置 > 蓝牙，然后重试。"
 
 #: src/core/src/bluetooth/pairing.cpp
-#, fuzzy
 msgid ""
 "Nobody connected. On the iPhone, open Settings > Bluetooth and tap this "
 "device."
-msgstr ""
-"未找到 iPhone。请解锁 iPhone 并打开 设置 > 蓝牙 使其开始广播，然后重新搜索。"
+msgstr "没有设备连接。请在 iPhone 上打开 设置 > 蓝牙，然后点按此设备。"
 
 #: src/core/src/bluetooth/pairing.cpp
 msgid "No Bluetooth adapter is present."
@@ -1647,14 +1653,13 @@ msgid "BlueZ refused to start scanning."
 msgstr "BlueZ 拒绝开始扫描。"
 
 #: src/core/src/bluetooth/pairing.cpp
-#, fuzzy
 msgid ""
 "BlueZ is holding a discovery session that never ended, so scanning cannot "
 "start. Turn Bluetooth off and on again in the system settings, or restart "
 "the device, and try again."
 msgstr ""
-"BlueZ 持有一个从未结束的发现会话，因此无法开始扫描。请重启蓝牙服务（sudo "
-"systemctl restart bluetooth）后重试。"
+"BlueZ 持有一个从未结束的发现会话，因此无法开始扫描。请在系统设置中关闭再重新"
+"打开蓝牙，或重启设备，然后重试。"
 
 #: src/core/src/bluetooth/pairing.cpp
 #, c++-format
@@ -1850,9 +1855,8 @@ msgid "Not an AirPods device."
 msgstr "这不是 AirPods 设备。"
 
 #: src/core/src/net.cpp
-#, fuzzy
 msgid "The network listener is turned off on this machine."
-msgstr "这台机器上蓝牙不可用。"
+msgstr "这台机器上的网络监听已关闭。"
 
 #: src/core/src/net.cpp
 msgid "Unknown listening mode."
