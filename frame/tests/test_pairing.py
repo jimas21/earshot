@@ -283,6 +283,23 @@ class ResultTests(unittest.TestCase):
         h.dirty()
         self.assertTrue(rig.pump(lambda: pair_view(rig)["ready"], 2))
 
+    def test_checklist_without_message_access_lists_only_switches_that_exist(self):
+        # No obexd, or an iPhone that never offers Message Access: its Messages/Contacts/Favorites/Recents
+        # switches are not on the phone, so the list must not send anyone looking for them.
+        rig, fake = self.finish("success")
+        self.accept(rig)
+        wait_phase(self, rig, "almost")
+        h = rig.helper
+        h.conn = dict(h.conn, ancs_ready=True, map_open=False, map_error="no_daemon", pbap_open=False,
+                      pbap_error="no_daemon")
+        h.dirty()
+        self.assertTrue(rig.pump(lambda: [i["id"] for i in pair_view(rig)["items"]] == ["notifications", "messages"], 2))
+        items = {i["id"]: i for i in pair_view(rig)["items"]}
+        self.assertEqual(items["notifications"]["label"], "Share System Notifications")
+        self.assertFalse(items["messages"]["essential"])
+        self.assertNotIn("Sync Contacts", items["messages"]["note"])
+        self.assertTrue(pair_view(rig)["ready"])
+
     def test_stale_bond_clears_our_side_and_says_what_to_do_on_the_iphone(self):
         for outcome in ("stale", "key_missing"):
             with self.subTest(outcome):
