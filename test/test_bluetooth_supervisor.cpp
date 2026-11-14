@@ -1406,3 +1406,26 @@ TEST(HoldAncs, ClassicAloneDoesNotHoldWhenLeIsVisible) {
     EXPECT_TRUE(should_hold_ancs(false, bearer, ANCS_BEARER_GRACE_SECONDS - 1, 0)) << "inside the grace window";
     EXPECT_TRUE(should_hold_ancs(true, bearer, past_grace, 0)) << "a live session holds";
 }
+
+// Without Bearer.LE1 the ANCS subscription is the only sign of a live LE link, and it needs the path the
+// hold grants. After one LE drop the hold lapsed for good, and notifications stayed off until a restart
+// although the iPhone was back over LE (2026-11-13). The window must open again.
+TEST(AncsHold, ReopensAfterTheIphoneComesBackOrOnARegularProbe) {
+    const int64_t lapse = ANCS_BEARER_GRACE_SECONDS + ANCS_REPROBE_SECONDS;
+    EXPECT_EQ(ancs_outage_start(true, true, false, 500, 100), -1) << "LE is up: no outage";
+    EXPECT_EQ(ancs_outage_start(false, true, false, 500, -1), 500) << "an outage starts now";
+    EXPECT_EQ(ancs_outage_start(false, true, false, 100 + lapse - 1, 100), 100) << "probed again too soon";
+    EXPECT_EQ(ancs_outage_start(false, true, false, 100 + lapse, 100), 100 + lapse)
+        << "never looked for a returned LE link again";
+    EXPECT_EQ(ancs_outage_start(false, true, true, 150, 100), 150) << "the iPhone reconnected: look again now";
+    EXPECT_EQ(ancs_outage_start(false, false, false, 100 + 10 * lapse, 100), 100)
+        << "probing with the iPhone gone is pointless";
+
+    // The reopened window holds the path again for the full grace, which is what lets a subscription start.
+    BearerStatus bearer;
+    bearer.classic_connected = true;
+    bearer.le_available = true;
+    const int64_t reopened = ancs_outage_start(false, true, false, 100 + lapse, 100);
+    EXPECT_TRUE(should_hold_ancs(false, bearer, reopened + ANCS_BEARER_GRACE_SECONDS - 1, reopened));
+    EXPECT_FALSE(should_hold_ancs(false, bearer, reopened + ANCS_BEARER_GRACE_SECONDS, reopened));
+}

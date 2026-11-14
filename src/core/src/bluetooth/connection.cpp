@@ -768,6 +768,7 @@ namespace tether::bluetooth {
         // When the LE bearer was last seen down, so a blip can be told from a
         // session that is really gone. -1 while it is up.
         int64_t le_down_since = -1;
+        bool ancs_classic_was_up = false;
         // When the LE link was first seen up while the phone offered no ANCS
         // service. -1 whenever that is not the case.
         int64_t ancs_absent_since = -1;
@@ -1265,10 +1266,9 @@ namespace tether::bluetooth {
         // short outage and let discovery decide; a real loss still clears it,
         // because an empty path is what makes the client forget a dead session.
         const bool le_up = bearers->status().le_connected;
-        if (le_up)
-            le_down_since = -1;
-        else if (le_down_since < 0)
-            le_down_since = now;
+        const bool classic_up = bearers->status().classic_connected;
+        le_down_since = ancs_outage_start(le_up, classic_up, classic_up && !ancs_classic_was_up, now, le_down_since);
+        ancs_classic_was_up = classic_up;
         // A live subscription outranks the property: an iPhone that is answering
         // ANCS is reachable whatever Bearer.LE1 says, and dropping the path under
         // it would end a session that is working.

@@ -32,6 +32,9 @@ namespace tether::bluetooth {
     // so a blip must not reset discovery, while a genuine loss still clears.
     inline constexpr int ANCS_BEARER_GRACE_SECONDS = 30;
 
+    // How long after a hold window lapses the engine opens a fresh one, while the Classic link is up.
+    inline constexpr int ANCS_REPROBE_SECONDS = 60;
+
     // How long BR/EDR may be up with no hands-free profile before the bearer is
     // cycled once to make BlueZ connect it.
     inline constexpr int HFP_ABSENT_SECONDS = 20;
@@ -114,6 +117,22 @@ namespace tether::bluetooth {
         should_solicit_ancs(bool ancs_enabled, const BearerStatus& bearer, int64_t now, int64_t ancs_absent_since) {
         const bool link_dead = ancs_absent_since >= 0 && now - ancs_absent_since >= ANCS_ABSENT_GRACE_SECONDS;
         return ancs_enabled && bearer.le_available && !bearer.le_dialling && (!bearer.le_connected || link_dead);
+    }
+
+    // When the current LE outage is counted from, for should_hold_ancs(). Without BlueZ's Bearer.LE1 the
+    // only sign of a live LE link is the ANCS subscription itself, and that needs the device path the hold
+    // grants. Once the hold lapsed nothing could bring it back short of a restart, though the iPhone had
+    // reopened LE (2026-11-13). So the window opens again when the Classic link comes back, and every
+    // ANCS_REPROBE_SECONDS while it stays up; a failed probe costs one local D-Bus call, no radio traffic.
+    inline int64_t ancs_outage_start(bool le_up, bool classic_connected, bool classic_came_up, int64_t now,
+                                     int64_t le_down_since) {
+        if (le_up)
+            return -1;
+        if (le_down_since < 0 || classic_came_up)
+            return now;
+        if (classic_connected && now - le_down_since >= ANCS_BEARER_GRACE_SECONDS + ANCS_REPROBE_SECONDS)
+            return now;
+        return le_down_since;
     }
 
     // Whether the ANCS client keeps its device path. Without a populated
